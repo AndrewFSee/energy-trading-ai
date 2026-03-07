@@ -1,0 +1,278 @@
+# Energy Trading AI — Central Configuration
+# All runtime parameters are defined here.
+# Secrets (API keys) live in .env — never commit those.
+
+# ---------------------------------------------------------------------------
+# Data Sources — Ticker Symbols
+# ---------------------------------------------------------------------------
+tickers:
+  crude_oil_wti: "CL=F"
+  crude_oil_brent: "BZ=F"
+  natural_gas: "NG=F"
+  vix: "^VIX"
+  dxy: "DX-Y.NYB"
+  sp500: "^GSPC"
+  heating_oil: "HO=F"
+  rbob_gasoline: "RB=F"
+  # Equities proxies
+  xle: "XLE"       # Energy sector ETF
+  xop: "XOP"       # Oil & Gas E&P ETF
+
+# ---------------------------------------------------------------------------
+# API Endpoints
+# ---------------------------------------------------------------------------
+apis:
+  eia:
+    base_url: "https://api.eia.gov/v2"
+    # Series IDs
+    crude_storage_series: "PET.WCRSTUS1.W"
+    nat_gas_storage_series: "NG.NW2_EPG0_SWO_R48_BCF.W"
+    crude_production_series: "PET.WCRFPUS2.W"
+    crude_imports_series: "PET.WCRIMUS2.W"
+    timeout_seconds: 30
+    max_retries: 3
+
+  fred:
+    base_url: "https://api.stlouisfed.org/fred"
+    series:
+      fed_funds_rate: "FEDFUNDS"
+      us_cpi: "CPIAUCSL"
+      us_gdp: "GDP"
+      us_unemployment: "UNRATE"
+      us_industrial_production: "INDPRO"
+      ten_year_treasury: "GS10"
+    timeout_seconds: 30
+
+  newsapi:
+    base_url: "https://newsapi.org/v2"
+    queries:
+      - "crude oil price"
+      - "natural gas price"
+      - "OPEC production"
+      - "energy market"
+      - "oil supply demand"
+    language: "en"
+    sort_by: "publishedAt"
+    page_size: 100
+    lookback_days: 7
+
+  noaa:
+    base_url: "https://www.ncdc.noaa.gov/cdo-web/api/v2"
+    dataset_id: "GHCND"
+    # Key US weather stations for HDD/CDD calculation
+    stations:
+      - "GHCND:USW00094728"  # New York (Central Park)
+      - "GHCND:USW00094846"  # Chicago O'Hare
+      - "GHCND:USW00013904"  # Houston Hobby
+    timeout_seconds: 30
+
+# ---------------------------------------------------------------------------
+# Feature Engineering
+# ---------------------------------------------------------------------------
+features:
+  technical:
+    rsi_period: 14
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    bollinger_period: 20
+    bollinger_std: 2.0
+    atr_period: 14
+    ema_periods: [8, 21, 50, 200]
+    sma_periods: [10, 20, 50]
+    stochastic_k: 14
+    stochastic_d: 3
+    williams_r_period: 14
+    obv_enabled: true
+
+  fundamental:
+    storage_surprise_window: 4   # weeks for rolling average
+    rig_count_lag: 1             # weeks lag for Baker Hughes rig count
+
+  macro:
+    correlation_window: 60       # days for rolling correlation
+
+  seasonal:
+    # Heating season months (Northern Hemisphere)
+    heating_months: [10, 11, 12, 1, 2, 3]
+    # Cooling season months
+    cooling_months: [6, 7, 8, 9]
+    # Hurricane season (Gulf of Mexico impact)
+    hurricane_months: [6, 7, 8, 9, 10, 11]
+
+# ---------------------------------------------------------------------------
+# NLP / Sentiment
+# ---------------------------------------------------------------------------
+nlp:
+  sentiment_model: "ProsusAI/finbert"
+  batch_size: 32
+  max_length: 512
+  sentiment_rolling_window: 7    # days for rolling sentiment index
+  min_articles_per_day: 3        # minimum articles required to compute index
+  news_dedup_threshold: 0.85     # cosine similarity threshold for dedup
+
+# ---------------------------------------------------------------------------
+# RAG / LLM Pipeline
+# ---------------------------------------------------------------------------
+rag:
+  # Chunking
+  chunk_size: 1000
+  chunk_overlap: 200
+  separators: ["\n\n", "\n", " ", ""]
+
+  # Embeddings
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  embedding_dimension: 384
+  # Set to "openai" to use text-embedding-3-small instead
+  embedding_provider: "sentence-transformers"
+
+  # Vector store
+  vector_store_type: "chroma"    # "chroma" or "faiss"
+  vector_store_path: "./chroma_db"
+  collection_name: "energy_trading_docs"
+  top_k_retrieval: 5
+  rerank_top_k: 3
+
+  # LLM
+  llm_provider: "openai"         # "openai" or "ollama"
+  openai_model: "gpt-4o"
+  ollama_model: "llama3"
+  temperature: 0.1
+  max_tokens: 2048
+  system_prompt: |
+    You are an expert energy market analyst and quantitative trader.
+    You have deep knowledge of crude oil, natural gas, and energy derivatives markets.
+    Provide concise, data-driven analysis grounded in the retrieved context.
+    Always cite your sources and quantify uncertainty where possible.
+
+  # Signal generation thresholds
+  signal_confidence_threshold: 0.65
+
+# ---------------------------------------------------------------------------
+# Model Hyperparameters
+# ---------------------------------------------------------------------------
+models:
+  # Training configuration
+  training:
+    lookback_window: 60          # days of history as input features
+    forecast_horizon: 5          # days ahead to forecast
+    train_ratio: 0.7
+    val_ratio: 0.15
+    test_ratio: 0.15
+    walk_forward_folds: 5
+    early_stopping_patience: 15
+    random_seed: 42
+
+  lstm:
+    hidden_size: 128
+    num_layers: 2
+    dropout: 0.2
+    bidirectional: false
+    learning_rate: 0.001
+    batch_size: 32
+    epochs: 100
+    optimizer: "adam"
+    weight_decay: 1.0e-5
+
+  transformer:
+    d_model: 128
+    nhead: 8
+    num_encoder_layers: 3
+    num_decoder_layers: 3
+    dim_feedforward: 256
+    dropout: 0.1
+    learning_rate: 0.0005
+    batch_size: 32
+    epochs: 100
+
+  tft:
+    hidden_size: 64
+    lstm_layers: 2
+    dropout: 0.1
+    attention_head_size: 4
+    learning_rate: 0.001
+    batch_size: 64
+    epochs: 50
+    max_encoder_length: 60
+    max_prediction_length: 5
+
+  xgboost:
+    n_estimators: 500
+    max_depth: 6
+    learning_rate: 0.05
+    subsample: 0.8
+    colsample_bytree: 0.8
+    min_child_weight: 1
+    gamma: 0.0
+    reg_alpha: 0.0
+    reg_lambda: 1.0
+    early_stopping_rounds: 50
+    n_jobs: -1
+
+  ensemble:
+    method: "weighted_average"   # "weighted_average" or "stacking"
+    weights:
+      lstm: 0.30
+      transformer: 0.25
+      tft: 0.25
+      xgboost: 0.20
+
+# ---------------------------------------------------------------------------
+# Strategy & Signal Generation
+# ---------------------------------------------------------------------------
+strategy:
+  signal_threshold_long: 0.015   # minimum predicted return to go long
+  signal_threshold_short: -0.015 # maximum predicted return to go short
+  signal_confirmation_window: 2  # bars signal must persist before trading
+
+  position_sizing:
+    method: "volatility_targeting" # "kelly", "volatility_targeting", "fixed_fractional"
+    target_volatility: 0.15       # annualized target portfolio volatility
+    kelly_fraction: 0.25          # fraction of Kelly criterion
+    fixed_fraction: 0.02          # fraction of capital per trade
+
+# ---------------------------------------------------------------------------
+# Risk Management
+# ---------------------------------------------------------------------------
+risk:
+  max_position_size: 0.20        # max single position as fraction of portfolio
+  max_portfolio_leverage: 1.5    # max total gross leverage
+  max_drawdown_limit: 0.15       # halt trading if drawdown exceeds this
+  var_confidence: 0.99           # VaR confidence level
+  var_lookback_days: 252         # lookback window for historical VaR
+  stop_loss_atr_multiple: 2.0    # stop loss = entry ± 2 * ATR
+  take_profit_atr_multiple: 4.0  # take profit = entry ± 4 * ATR
+  max_correlated_positions: 3    # max positions with correlation > 0.7
+
+# ---------------------------------------------------------------------------
+# Backtesting
+# ---------------------------------------------------------------------------
+backtesting:
+  start_date: "2015-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 1_000_000     # USD
+  transaction_cost_bps: 5        # basis points per trade (one-way)
+  slippage_bps: 2                # basis points slippage per trade
+  margin_requirement: 0.10       # 10% margin for futures
+  risk_free_rate: 0.05           # annualized, for Sharpe calculation
+  benchmark: "CL=F"              # benchmark ticker
+
+# ---------------------------------------------------------------------------
+# Dashboard
+# ---------------------------------------------------------------------------
+dashboard:
+  refresh_interval_seconds: 300  # auto-refresh every 5 minutes
+  default_lookback_days: 365
+  forecast_display_days: 30
+  chart_theme: "plotly_dark"
+  port: 8501
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging:
+  level: "INFO"
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level} | {name} | {message}"
+  log_file: "logs/energy_trading_ai.log"
+  rotation: "10 MB"
+  retention: "30 days"

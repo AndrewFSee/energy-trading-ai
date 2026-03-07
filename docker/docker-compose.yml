@@ -1,0 +1,83 @@
+version: "3.9"
+
+services:
+  # ─── Streamlit Dashboard ──────────────────────────────────────────
+  dashboard:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: energy-trading-ai:latest
+    container_name: energy_trading_dashboard
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    volumes:
+      - ../data:/app/data
+      - ../models:/app/models
+      - ../chroma_db:/app/chroma_db
+      - ../logs:/app/logs
+    env_file:
+      - ../.env
+    environment:
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8000
+    depends_on:
+      - chromadb
+    networks:
+      - energy_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ─── ChromaDB Vector Store ────────────────────────────────────────
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: energy_trading_chromadb
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - chromadb_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+    networks:
+      - energy_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ─── Optional: Ollama Local LLM ───────────────────────────────────
+  # Uncomment to use a local LLM instead of OpenAI
+  # ollama:
+  #   image: ollama/ollama:latest
+  #   container_name: energy_trading_ollama
+  #   restart: unless-stopped
+  #   ports:
+  #     - "11434:11434"
+  #   volumes:
+  #     - ollama_data:/root/.ollama
+  #   networks:
+  #     - energy_net
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: all
+  #             capabilities: [gpu]
+
+volumes:
+  chromadb_data:
+    driver: local
+  # ollama_data:
+  #   driver: local
+
+networks:
+  energy_net:
+    driver: bridge
