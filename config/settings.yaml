@@ -66,6 +66,29 @@ apis:
       - "GHCND:USW00013904"  # Houston Hobby
     timeout_seconds: 30
 
+  # Open-Meteo (free, no API key required)
+  openmeteo:
+    base_url: "https://archive-api.open-meteo.com/v1/archive"
+    # Population-weighted Eastern/Central US cities
+    cities:
+      - { name: "new_york",     lat: 40.71, lon: -74.01, weight: 0.20 }
+      - { name: "chicago",      lat: 41.88, lon: -87.63, weight: 0.15 }
+      - { name: "houston",      lat: 29.76, lon: -95.37, weight: 0.12 }
+      - { name: "philadelphia", lat: 39.95, lon: -75.17, weight: 0.10 }
+      - { name: "dallas",       lat: 32.78, lon: -96.80, weight: 0.10 }
+    base_temp_f: 65.0
+
+  # EIA Electricity Demand (hourly grid data)
+  eia_demand:
+    endpoint: "/electricity/rto/region-data/data/"
+    regions:
+      - "PJM"    # Mid-Atlantic + Midwest (largest US RTO)
+      - "MISO"   # Midcontinent ISO (15 states)
+      - "NYIS"   # New York ISO
+      - "ISNE"   # ISO New England
+    data_start: "2018-01-01"
+    page_size: 5000
+
 # ---------------------------------------------------------------------------
 # Feature Engineering
 # ---------------------------------------------------------------------------
@@ -208,6 +231,29 @@ models:
     reg_lambda: 1.0
     early_stopping_rounds: 50
     n_jobs: -1
+
+  # Load forecasting models (power demand)
+  xgb_load:
+    n_estimators: 800
+    max_depth: 7
+    learning_rate: 0.03
+    subsample: 0.85
+    colsample_bytree: 0.75
+    min_child_weight: 5
+    gamma: 0.1
+    reg_alpha: 0.1
+    reg_lambda: 1.0
+    early_stopping_rounds: 50
+
+  lstm_load:
+    hidden_size: 128
+    num_layers: 2
+    dropout: 0.2
+    lookback: 7
+    learning_rate: 0.001
+    batch_size: 64
+    epochs: 100
+    early_stopping_patience: 15
 
   ensemble:
     method: "weighted_average"   # "weighted_average" or "stacking"

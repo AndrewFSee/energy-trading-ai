@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 @click.option("--skip-eia", is_flag=True, help="Skip EIA data download")
 @click.option("--skip-fred", is_flag=True, help="Skip FRED data download")
 @click.option("--skip-news", is_flag=True, help="Skip news download")
+@click.option("--skip-gdelt", is_flag=True, help="Skip GDELT sentiment download")
 def main(
     start: str,
     end: str | None,
@@ -45,6 +46,7 @@ def main(
     skip_eia: bool,
     skip_fred: bool,
     skip_news: bool,
+    skip_gdelt: bool,
 ) -> None:
     """Download all energy market data to the raw data directory."""
     from rich.console import Console
@@ -117,6 +119,62 @@ def main(
                 progress.advance(task4)
             except Exception as exc:
                 console.print(f"  [yellow]⚠ News data unavailable: {exc}[/yellow]")
+
+        # 5. FRED sentiment proxies (EPU, credit spread, consumer sentiment, financial stress)
+        if not skip_fred:
+            task5 = progress.add_task("[cyan]Downloading FRED sentiment proxies...", total=1)
+            try:
+                from src.data.fred_client import FREDClient
+
+                fred_sent = FREDClient()
+                sentiment_proxies = fred_sent.fetch_sentiment_proxies(start=start, end=end)
+                sentiment_proxies.to_csv(output_dir / "fred_sentiment.csv")
+                console.print(
+                    f"  ✓ Downloaded FRED sentiment proxies: "
+                    f"{len(sentiment_proxies)} rows, {sentiment_proxies.shape[1]} features"
+                )
+                progress.advance(task5)
+            except Exception as exc:
+                console.print(f"  [yellow]⚠ FRED sentiment proxies unavailable: {exc}[/yellow]")
+
+        # 6. GPR (Geopolitical Risk Index) — daily, 1985+
+        task_gpr = progress.add_task("[cyan]Downloading GPR index...", total=1)
+        try:
+            from src.data.gpr_fetcher import fetch_gpr_daily
+
+            gpr_df = fetch_gpr_daily(start=start, end=end)
+            if not gpr_df.empty:
+                gpr_df.to_csv(output_dir / "gpr_daily.csv")
+                console.print(
+                    f"  ✓ Downloaded GPR index: {len(gpr_df)} daily records, "
+                    f"{gpr_df.shape[1]} features"
+                )
+            else:
+                console.print("  [yellow]⚠ GPR index returned no data[/yellow]")
+            progress.advance(task_gpr)
+        except Exception as exc:
+            console.print(f"  [yellow]⚠ GPR index unavailable: {exc}[/yellow]")
+
+        # 7. GDELT energy news sentiment (2015+)
+        if not skip_gdelt:
+            task6 = progress.add_task("[cyan]Downloading GDELT sentiment...", total=1)
+            try:
+                from src.data.gdelt_sentiment import GDELTSentiment
+
+                gdelt = GDELTSentiment()
+                gdelt_df = gdelt.fetch_sentiment(start=start, end=end)
+                if not gdelt_df.empty:
+                    gdelt_df.to_csv(output_dir / "gdelt_sentiment.csv")
+                    console.print(
+                        f"  ✓ Downloaded GDELT sentiment: "
+                        f"{len(gdelt_df)} daily records ({gdelt_df.index.min():%Y-%m-%d} → "
+                        f"{gdelt_df.index.max():%Y-%m-%d})"
+                    )
+                else:
+                    console.print("  [yellow]⚠ GDELT returned no data[/yellow]")
+                progress.advance(task6)
+            except Exception as exc:
+                console.print(f"  [yellow]⚠ GDELT sentiment unavailable: {exc}[/yellow]")
 
     console.print("\n[bold green]Data ingestion complete![/bold green]")
 

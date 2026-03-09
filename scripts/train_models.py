@@ -33,12 +33,16 @@ logger = logging.getLogger(__name__)
     "--model", default="all", type=click.Choice(["all", "xgboost", "lstm", "transformer"])
 )
 @click.option("--folds", default=5, help="Walk-forward validation folds")
+@click.option("--non-overlapping", is_flag=True, default=False, help="Use non-overlapping targets (subsample every horizon-th row)")
+@click.option("--horizon", default=5, help="Target horizon in days (used with --non-overlapping)")
 def main(
     features_dir: str,
     models_dir: str,
     instrument: str,
     model: str,
     folds: int,
+    non_overlapping: bool,
+    horizon: int,
 ) -> None:
     """Train forecasting models with walk-forward validation."""
     from rich.console import Console
@@ -67,10 +71,19 @@ def main(
         c for c in df.columns if c not in {target_col, "Open", "High", "Low", "Close", "Volume"}
     ]
     df = df.dropna(subset=[target_col])
+
+    # Non-overlapping: subsample every horizon-th row for independent targets
+    if non_overlapping:
+        n_before = len(df)
+        df = df.iloc[::horizon]
+        console.print(f"  [yellow]Non-overlapping mode:[/yellow] subsampled every {horizon}th row")
+        console.print(f"    {n_before} → {len(df)} independent samples")
+
     X = df[feature_cols].fillna(0).values
     y = df[target_col].values
 
-    console.print(f"  Dataset: {len(X)} samples, {len(feature_cols)} features")
+    overlap_label = "non-overlapping" if non_overlapping else "overlapping"
+    console.print(f"  Dataset: {len(X)} samples, {len(feature_cols)} features ({overlap_label})")
     console.print(f"  Walk-forward folds: {folds}\n")
 
     models_to_train = []
@@ -111,7 +124,8 @@ def main(
 
         # Final training on full dataset
         trainer.final_train(X, y)
-        save_path = models_path / f"{m.name.lower()}_{instrument}.pkl"
+        ext = ".pt" if m.name in ("LSTM", "Transformer") else ".pkl"
+        save_path = models_path / f"{m.name.lower()}_{instrument}{ext}"
         m.save(save_path)
         console.print(f"    ✓ Saved to {save_path}")
 

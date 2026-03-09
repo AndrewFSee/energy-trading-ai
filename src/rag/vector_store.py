@@ -112,8 +112,12 @@ class VectorStoreManager:
         elif self.store_type == "faiss":
             self._add_to_faiss(chunks)
 
+    # ChromaDB enforces a max batch size (typically 5 461).  We stay
+    # comfortably below it to avoid InternalError on large ingestions.
+    _CHROMA_BATCH_SIZE = 5000
+
     def _add_to_chroma(self, chunks: list[dict]) -> None:
-        """Add chunks to ChromaDB."""
+        """Add chunks to ChromaDB in batches."""
         ids = [
             f"{c.get('filename', 'doc')}_p{c.get('page_number', 0)}_c{c.get('chunk_index', i)}"
             for i, c in enumerate(chunks)
@@ -132,13 +136,21 @@ class VectorStoreManager:
             }
             for c in chunks
         ]
-        self._collection.add(  # type: ignore[union-attr]
-            ids=ids,
-            documents=texts,
-            embeddings=embeddings,
-            metadatas=metadatas,
-        )
-        logger.info("Added %d chunks to ChromaDB collection", len(chunks))
+
+        bs = self._CHROMA_BATCH_SIZE
+        total = len(chunks)
+        for start in range(0, total, bs):
+            end = min(start + bs, total)
+            self._collection.add(  # type: ignore[union-attr]
+                ids=ids[start:end],
+                documents=texts[start:end],
+                embeddings=embeddings[start:end],
+                metadatas=metadatas[start:end],
+            )
+            logger.info(
+                "Added batch %d–%d of %d chunks to ChromaDB",
+                start, end, total,
+            )
 
     def _add_to_faiss(self, chunks: list[dict]) -> None:
         """Add chunks to FAISS index."""

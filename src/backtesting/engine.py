@@ -112,7 +112,7 @@ class BacktestEngine:
             sig = sig[: self.config.end_date]
             pos_sizes = pos_sizes[: self.config.end_date]
 
-        n = len(px)  # noqa: F841
+
         total_cost_fraction = (
             self.config.transaction_cost_bps + self.config.slippage_bps
         ) / 10_000.0
@@ -138,15 +138,28 @@ class BacktestEngine:
         rolling_max = portfolio_value.cummax()
         drawdown = (portfolio_value - rolling_max) / rolling_max
 
-        # Check risk manager drawdown halt
+        # Check risk manager drawdown halt — zero out positions after breach
         if self.risk_manager is not None:
-            for dt, pv in portfolio_value.items():
-                if (
+            halted = False
+            for i, (dt, pv) in enumerate(portfolio_value.items()):
+                if halted:
+                    # After halt: flatten position and stop trading
+                    position.iloc[i] = 0.0
+                    strategy_returns_net.iloc[i] = 0.0
+                    trade_costs.iloc[i] = 0.0
+                elif (
                     self.risk_manager.update_drawdown(pv / self.config.initial_capital)
                     < -self.risk_manager.max_drawdown_limit
                 ):
                     logger.warning("Risk manager triggered halt at %s", dt)
-                    break
+                    halted = True
+            if halted:
+                # Recompute portfolio value with zeroed positions
+                portfolio_value = self.config.initial_capital * (
+                    1 + strategy_returns_net
+                ).cumprod()
+                rolling_max = portfolio_value.cummax()
+                drawdown = (portfolio_value - rolling_max) / rolling_max
 
         result = pd.DataFrame(
             {

@@ -100,7 +100,7 @@ class SentimentAnalyzer:
             }
 
         try:
-            result = self.pipeline(text, return_all_scores=True)[0]  # type: ignore[index]
+            result = self.pipeline(text, top_k=None)[0]  # type: ignore[index]
             scores = {item["label"].lower(): item["score"] for item in result}
             label = max(scores, key=scores.get)  # type: ignore[arg-type]
             return {
@@ -133,8 +133,28 @@ class SentimentAnalyzer:
         results = []
         for i in range(0, len(texts), self.batch_size):
             batch = texts[i : i + self.batch_size]
-            for text in batch:
-                results.append(self.analyse_text(text))
+            # Filter out empty texts and track their positions
+            valid = [(j, t) for j, t in enumerate(batch) if t and t.strip()]
+            batch_results: list[dict[str, float]] = [
+                {"label": "neutral", "score": 0.0, "positive": 0.0, "negative": 0.0, "neutral": 1.0}
+            ] * len(batch)
+            if valid:
+                indices, valid_texts = zip(*valid, strict=True)
+                try:
+                    raw = self.pipeline(list(valid_texts), top_k=None)  # type: ignore[arg-type]
+                    for idx, item in zip(indices, raw, strict=True):
+                        scores = {r["label"].lower(): r["score"] for r in item}
+                        label = max(scores, key=scores.get)  # type: ignore[arg-type]
+                        batch_results[idx] = {
+                            "label": label,
+                            "score": scores[label],
+                            "positive": scores.get("positive", 0.0),
+                            "negative": scores.get("negative", 0.0),
+                            "neutral": scores.get("neutral", 0.0),
+                        }
+                except Exception as exc:
+                    logger.warning("Batch sentiment analysis failed: %s", exc)
+            results.extend(batch_results)
         return results
 
     def analyse_dataframe(

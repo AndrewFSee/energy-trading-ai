@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -35,7 +35,7 @@ class Position:
     direction: int
     size: float
     entry_price: float
-    entry_time: datetime = field(default_factory=datetime.utcnow)
+    entry_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     stop_loss: float | None = None
     take_profit: float | None = None
     unrealised_pnl: float = 0.0
@@ -145,7 +145,7 @@ class Portfolio:
             direction=direction,
             size=size,
             entry_price=price,
-            entry_time=timestamp or datetime.utcnow(),
+            entry_time=timestamp or datetime.now(timezone.utc),
             stop_loss=stop_loss,
             take_profit=take_profit,
         )
@@ -192,7 +192,7 @@ class Portfolio:
             "pnl_pct": pnl_pct,
             "pnl_dollars": pnl_dollars,
             "entry_time": pos.entry_time,
-            "exit_time": timestamp or datetime.utcnow(),
+            "exit_time": timestamp or datetime.now(timezone.utc),
         }
         self.closed_trades.append(trade)
         self.capital += pnl_dollars
@@ -227,7 +227,7 @@ class Portfolio:
         """
         self.equity_curve.append(
             {
-                "timestamp": timestamp or datetime.utcnow(),
+                "timestamp": timestamp or datetime.now(timezone.utc),
                 "portfolio_value": self.total_value,
                 "capital": self.capital,
                 "n_positions": len(self.positions),

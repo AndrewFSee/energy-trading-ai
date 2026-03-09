@@ -55,7 +55,7 @@ class PerformanceReport:
     var_95: float = 0.0
     var_99: float = 0.0
 
-    def to_dict(self) -> dict[str, float | int]:
+    def to_dict(self) -> dict[str, str | int]:
         """Serialise metrics to a flat dictionary."""
         return {
             "Total Return": f"{self.total_return:.2%}",
@@ -121,7 +121,6 @@ class PerformanceMetrics:
         # Risk-adjusted returns
         report.sharpe_ratio = self._sharpe(returns)
         report.sortino_ratio = self._sortino(returns)
-        report.calmar_ratio = self._calmar(report.annualised_return, report.max_drawdown)
 
         # Drawdown analysis
         drawdown_series = backtest_result["drawdown"].dropna()

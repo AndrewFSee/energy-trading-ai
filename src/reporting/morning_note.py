@@ -11,7 +11,7 @@ Generates a structured energy market morning note by combining:
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +65,8 @@ class MorningNoteGenerator:
 
     def __init__(
         self,
-        llm_client,  # type: ignore[type-arg]
-        retriever=None,  # type: ignore[type-arg]
+        llm_client,
+        retriever=None
     ) -> None:
         """Initialise the morning note generator.
 
@@ -171,7 +171,7 @@ class MorningNoteGenerator:
         Returns:
             Formatted morning note as a markdown string.
         """
-        date = date or datetime.utcnow()
+        date = date or datetime.now(timezone.utc)
         date_str = date.strftime("%A, %d %B %Y")
 
         if sentiment_score > 0.1:

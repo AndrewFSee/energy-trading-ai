@@ -39,6 +39,15 @@ class FREDClient:
         "m2_money_supply": "M2SL",
     }
 
+    # Sentiment proxy series from FRED — capture market fear, policy
+    # uncertainty, and consumer confidence as features.
+    SENTIMENT_SERIES: dict[str, str] = {
+        "epu_index": "USEPUINDXD",           # Economic Policy Uncertainty (daily, 1985+)
+        "hy_spread": "BAMLH0A0HYM2",         # High-Yield OAS — credit fear (daily, 1997+)
+        "consumer_sentiment": "UMCSENT",      # U. Mich Consumer Sentiment (monthly, 1978+)
+        "financial_stress": "STLFSI2",        # St. Louis Fin. Stress Index (weekly, 1993+)
+    }
+
     def __init__(self, api_key: str | None = None) -> None:
         """Initialise the FRED client.
 
@@ -180,4 +189,64 @@ class FREDClient:
         # Forward-fill monthly/quarterly series to daily frequency
         df = df.resample("D").last().ffill()
         logger.info("Macro feature DataFrame: shape=%s", df.shape)
+        return df
+
+    def fetch_sentiment_proxies(
+        self,
+        start: str | None = None,
+        end: str | None = None,
+    ) -> pd.DataFrame:
+        """Fetch FRED sentiment-proxy series and compute derived features.
+
+        Downloads the Economic Policy Uncertainty Index, high-yield credit
+        spread, consumer sentiment, and financial stress index, then
+        builds additional features (rolling z-scores, changes, regimes).
+
+        Args:
+            start: Start date ``YYYY-MM-DD``.
+            end: End date ``YYYY-MM-DD``.
+
+        Returns:
+            DataFrame indexed by date with sentiment proxy features.
+        """
+        import numpy as np
+
+        frames: list[pd.Series] = []
+        for name, series_id in self.SENTIMENT_SERIES.items():
+            series = self.fetch_series(series_id, start=start, end=end)
+            series.name = name
+            frames.append(series)
+
+        if not frames:
+            return pd.DataFrame()
+
+        df = pd.concat(frames, axis=1)
+        df.index.name = "date"
+        df = df.resample("D").last().ffill()
+
+        # --- Derived features ---
+        # EPU z-score and regime
+        if "epu_index" in df.columns:
+            roll = df["epu_index"].rolling(60, min_periods=10)
+            df["epu_zscore"] = (df["epu_index"] - roll.mean()) / roll.std()
+            df["epu_ma30"] = df["epu_index"].rolling(30, min_periods=1).mean()
+            df["epu_high"] = (df["epu_index"] > df["epu_index"].quantile(0.75)).astype(int)
+
+        # Credit spread features
+        if "hy_spread" in df.columns:
+            df["hy_spread_change_5d"] = df["hy_spread"].diff(5)
+            df["hy_spread_change_20d"] = df["hy_spread"].diff(20)
+            roll = df["hy_spread"].rolling(60, min_periods=10)
+            df["hy_spread_zscore"] = (df["hy_spread"] - roll.mean()) / roll.std()
+            df["credit_stress_high"] = (df["hy_spread"] > 5.0).astype(int)
+
+        # Consumer sentiment momentum
+        if "consumer_sentiment" in df.columns:
+            df["consumer_sent_change"] = df["consumer_sentiment"].diff(30)
+
+        # Financial stress regime
+        if "financial_stress" in df.columns:
+            df["fin_stress_elevated"] = (df["financial_stress"] > 0).astype(int)
+
+        logger.info("Sentiment proxy DataFrame: shape=%s", df.shape)
         return df

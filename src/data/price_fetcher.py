@@ -33,10 +33,12 @@ class PriceFetcher:
         "heating_oil": "HO=F",
         "rbob_gasoline": "RB=F",
         "vix": "^VIX",
+        "ovx": "^OVX",  # CBOE Crude Oil Volatility Index (oil-specific fear)
         "dxy": "DX-Y.NYB",
         "sp500": "^GSPC",
         "xle": "XLE",
         "xop": "XOP",
+        "gold": "GC=F",  # Gold futures — safe-haven/geopolitical proxy
     }
 
     def __init__(self, tickers: dict[str, str] | None = None) -> None:

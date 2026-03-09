@@ -43,6 +43,7 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
+.pytest_tmp/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -70,6 +71,9 @@ checkpoints/
 vector_store/
 chroma_db/
 *.faiss
+
+# Generated reports
+reports/
 
 # Logs
 *.log

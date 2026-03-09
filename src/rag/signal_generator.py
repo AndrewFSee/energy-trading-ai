@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 from src.rag.qa_chain import QAChain
 
@@ -59,7 +59,7 @@ class TradingSignal:
     reasoning: str
     key_risks: str
     time_horizon: str
-    generated_at: datetime = field(default_factory=datetime.utcnow)
+    generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     raw_response: str = ""
 
     @property

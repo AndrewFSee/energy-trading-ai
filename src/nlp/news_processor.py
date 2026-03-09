@@ -106,6 +106,47 @@ class NewsProcessor:
         lower = text.lower()
         return any(kw in lower for kw in ENERGY_KEYWORDS)
 
+    def _near_dedup(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Remove near-duplicate articles using cosine similarity on titles.
+
+        Uses simple TF-IDF vectorisation of titles and pairwise cosine
+        similarity.  Articles whose similarity exceeds
+        :attr:`dedup_threshold` are dropped (keeping the first).
+
+        Args:
+            df: DataFrame with a ``title`` column.
+
+        Returns:
+            De-duplicated DataFrame.
+        """
+        try:
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            from sklearn.metrics.pairwise import cosine_similarity
+        except ImportError:
+            logger.warning("scikit-learn not available — skipping near-dedup")
+            return df
+
+        titles = df["title"].fillna("").tolist()
+        tfidf = TfidfVectorizer(stop_words="english", max_features=5000)
+        matrix = tfidf.fit_transform(titles)
+        sim = cosine_similarity(matrix)
+
+        to_drop: set[int] = set()
+        for i in range(len(sim)):
+            if i in to_drop:
+                continue
+            for j in range(i + 1, len(sim)):
+                if j in to_drop:
+                    continue
+                if sim[i, j] >= self.dedup_threshold:
+                    to_drop.add(j)
+
+        if to_drop:
+            before = len(df)
+            df = df.drop(df.index[list(to_drop)]).reset_index(drop=True)
+            logger.info("Near-dedup removed %d articles (%d → %d)", len(to_drop), before, len(df))
+        return df
+
     def process(self, df: pd.DataFrame) -> pd.DataFrame:
         """Full processing pipeline: clean, filter, deduplicate.
 
@@ -146,8 +187,10 @@ class NewsProcessor:
             df = df[mask].copy()
             logger.info("Relevance filter: %d → %d articles", before, len(df))
 
-        # 5. Deduplicate by title similarity (simple exact-title dedup first)
+        # 5. Deduplicate: exact title dedup, then cosine-similarity near-dedup
         df = df.drop_duplicates(subset=["title"])
+        if self.dedup_threshold < 1.0 and len(df) > 1:
+            df = self._near_dedup(df)
 
         # 6. Build combined text for NLP
         df["full_text"] = (

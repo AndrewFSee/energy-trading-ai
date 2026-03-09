@@ -32,6 +32,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "fredapi>=0.5.1",
     "feedparser>=6.0.11",
+    "openpyxl>=3.1.0",
+    "tabulate>=0.9.0",
     # Feature engineering
     "ta>=0.11.0",
     "scikit-learn>=1.4.0",
@@ -70,7 +72,6 @@ dependencies = [
 dev = [
     "pytest>=8.2.0",
     "pytest-cov>=5.0.0",
-    "pytest-asyncio>=0.23.0",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
     "types-requests>=2.31.0",
@@ -123,7 +124,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "--tb=short -v"
+addopts = "--tb=short -v --basetemp=.pytest_tmp"
 
 [tool.coverage.run]
 source = ["src"]
