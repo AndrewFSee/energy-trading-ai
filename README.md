@@ -1,129 +1,140 @@
-# ⚡ Energy Trading AI
+﻿# ⚡ Energy Trading AI
 
-[![CI](https://github.com/AndrewFSee/energy-trading-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/AndrewFSee/energy-trading-ai/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
-> **End-to-end energy trading AI system** — crude oil & natural gas price forecasting with deep learning, NLP sentiment analysis, RAG/LLM pipeline, and full algorithmic trading infrastructure.
+> **Quantitative analytics platform for power & gas markets** — storage valuation, spark-spread modelling, portfolio VaR, demand/generation forecasting, and AI-generated research notes, all backed by live EIA/FRED/weather data and served through an interactive Streamlit dashboard.
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
 - [Overview](#overview)
 - [Architecture](#architecture)
-- [Features](#features)
+- [Core Models](#core-models)
+- [Key Results](#key-results)
 - [Project Structure](#project-structure)
 - [Setup](#setup)
 - [Quick Start](#quick-start)
+- [Dashboard](#dashboard)
 - [Data Sources](#data-sources)
-- [RAGLLM Setup](#ragllm-setup)
-- [Recommended Books and Reports](#recommended-books-and-reports)
-- [Contributing](#contributing)
+- [RAG / LLM Setup](#rag--llm-setup)
 - [License](#license)
 
 ---
 
 ## Overview
 
-Energy Trading AI is a production-quality quantitative research and algorithmic trading platform for energy markets. It combines:
+This project is a full-stack energy quantitative analytics platform covering the core competencies of a power/gas trading desk:
 
-1. **Deep Learning Price Forecasting** — LSTM, Transformer, Temporal Fusion Transformer, XGBoost ensemble
-2. **NLP Sentiment Analysis** — FinBERT-powered sentiment from energy news, aggregated into a daily trading signal
-3. **RAG/LLM Pipeline** — Retrieval-Augmented Generation from energy trading PDFs and reports, powering qualitative signal generation and automated morning research notes
-4. **Full Algorithmic Trading Infrastructure** — data ingestion → feature engineering → signal generation → portfolio construction → backtesting → risk management → live dashboard
+| Domain | What's Implemented |
+|--------|--------------------|
+| **Physical Asset Valuation** | Natural gas storage valuation — intrinsic (LP) + extrinsic (LSMC) + Greeks |
+| **Spread Analytics** | Spark-spread modelling across 4 ISO regions with dispatch and merit-order analysis |
+| **Risk Management** | Portfolio VaR (6 methods), energy stress scenarios, Kupiec backtesting |
+| **Load Forecasting** | Electricity demand prediction (XGBoost, LSTM) |
+| **Generation Forecasting** | Wind generation and NG production direction models |
+| **Research Automation** | Agentic morning briefing — GPT-4o synthesises all model outputs into a research note |
+| **Interactive Dashboard** | 5-tab Streamlit app with live data, charts, and LLM narrative |
+
+Data is sourced from **EIA**, **FRED**, **yfinance**, **NOAA**, and **NewsAPI** — no static datasets.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                  DATA INGESTION LAYER                    │
-│  yfinance │ EIA API │ FRED │ NewsAPI │ NOAA │ PDFs      │
-└──────────────────────┬──────────────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────────────┐
-│               FEATURE ENGINEERING                        │
-│  Technical indicators │ Macro features │ Seasonal feats  │
-│  Futures curve shape  │ Storage surprise │ Weather feats  │
-└──────────────────────┬──────────────────────────────────┘
-                       ▼
-┌──────────────────┐  ┌──────────────────────────────────┐
-│   NLP PIPELINE   │  │         RAG / LLM PIPELINE       │
-│ FinBERT/News     │  │  PDFs → Chunks → VectorStore     │
-│ Sentiment Index  │  │  News + Query → LLM → Context    │
-│                  │  │  → Qualitative Signal + Reports   │
-└────────┬─────────┘  └──────────────┬───────────────────┘
-         ▼                           ▼
-┌─────────────────────────────────────────────────────────┐
-│              ML / DL FORECASTING ENGINE                   │
-│  LSTM / Transformer / TFT / XGBoost Ensemble             │
-│  Inputs: Quant features + Sentiment + LLM Context Score  │
-└──────────────────────┬──────────────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────────────┐
-│            STRATEGY & RISK MANAGEMENT                    │
-│  Signal → Position sizing → Risk limits → Execution      │
-│  Sharpe, Max DD, VaR, Calmar ratio                       │
-└──────────────────────┬──────────────────────────────────┘
-                       ▼
-┌─────────────────────────────────────────────────────────┐
-│              DASHBOARD & REPORTING                        │
-│  Streamlit: Live forecasts, P&L, LLM morning note        │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                   DATA INGESTION LAYER                    │
+│  yfinance (NG/CL/UNG)  │  EIA v2 (storage, generation,  │
+│  production)  │  FRED (macro)  │  NOAA (weather)  │ PDFs │
+└────────────────────────┬─────────────────────────────────┘
+                         ▼
+┌──────────────────────────────────────────────────────────┐
+│              FEATURE ENGINEERING & NLP                     │
+│  Technical indicators  │  Macro features  │  Seasonal     │
+│  FinBERT sentiment     │  Weather features │  Calendar    │
+└────────────────────────┬─────────────────────────────────┘
+                         ▼
+┌─────────────────┐ ┌──────────────┐ ┌─────────────────────┐
+│ QUANT MODELS    │ │  FORECASTING │ │   RAG / LLM         │
+│ Storage Valuat. │ │  XGB Demand  │ │ 40k-doc VectorStore │
+│ Spark Spreads   │ │  LSTM Demand │ │ GPT-4o Morning Note │
+│ Portfolio VaR   │ │  Wind Gen    │ │ Signal Generation   │
+│                 │ │  NG Prod Dir │ │                     │
+└────────┬────────┘ └──────┬───────┘ └──────────┬──────────┘
+         └─────────────────┼─────────────────────┘
+                           ▼
+┌──────────────────────────────────────────────────────────┐
+│              STREAMLIT DASHBOARD (5 tabs)                  │
+│  Price & Technicals │ Storage Valuation │ Spark Spreads   │
+│  VaR & Risk         │ AI Morning Note                     │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Features
+## Core Models
 
-### Data Ingestion
-- **yfinance**: WTI crude (`CL=F`), Brent (`BZ=F`), Natural Gas (`NG=F`), VIX (`^VIX`), DXY, S&P 500
-- **EIA API**: Weekly crude oil & natural gas storage, production, imports/exports
-- **FRED API**: Fed funds rate, CPI, GDP, industrial production, yield curve
-- **NOAA API**: Heating/cooling degree days (HDD/CDD) for demand modelling
-- **NewsAPI + RSS**: Energy market headlines from Reuters, EIA, S&P Global Platts
+### 1. Natural Gas Storage Valuation
 
-### Feature Engineering
-- **Technical**: RSI, MACD, Bollinger Bands, ATR, Stochastic, EMA/SMA, OBV, realised volatility
-- **Fundamental**: Storage surprise, rig count changes, futures curve shape (contango/backwardation)
-- **Macro**: DXY correlation, S&P 500/VIX regime, yield curve slope, interest rate level
-- **Seasonal**: Sin/cos cyclical encodings, heating/cooling/driving/hurricane season indicators
+Values gas storage facilities using industry-standard methods:
 
-### NLP Sentiment
-- **FinBERT** (`ProsusAI/finbert`) for financial text sentiment classification
-- Daily rolling sentiment index aggregated from energy news headlines
-- Sentiment momentum and regime features for ML model input
+- **Ornstein-Uhlenbeck calibration** on historical Henry Hub prices (κ=1.018, θ=$4.33, σ=3.143)
+- **Intrinsic valuation** via linear programming — optimal injection/withdrawal schedule against the forward curve
+- **Extrinsic valuation** via Least-Squares Monte Carlo (Longstaff-Schwartz) — captures optionality above intrinsic
+- **Greeks** — delta, gamma, theta, vega for hedging
+- **Two facility types** — salt cavern (high deliverability) and depleted reservoir (high working gas)
 
-### RAG / LLM Pipeline
-- **Document ingestion**: PDF loading (PyMuPDF), text chunking, embedding generation
-- **Vector store**: ChromaDB (persistent) or FAISS (in-memory)
-- **Retrieval**: Dense semantic search with optional cross-encoder reranking
-- **Signal generation**: LLM-based qualitative BULLISH/BEARISH/NEUTRAL signal with confidence score
-- **Morning notes**: Automated daily research notes combining market data + RAG context
+### 2. Spark-Spread Analytics
 
-### ML/DL Models
+Models gas-fired generation profitability across **PJM, MISO, NYISO, and ISO-NE**:
 
-| Model | Type | Key Strengths |
-|-------|------|---------------|
-| **LSTM** | PyTorch | Sequence modelling, long-range dependencies |
-| **Transformer** | PyTorch | Parallel attention, long lookback windows |
-| **TFT** | pytorch-forecasting | Interpretable temporal attention |
-| **XGBoost** | Gradient Boosting | Tabular features, fast, feature importance |
-| **Ensemble** | Weighted Average / Stacking | Best out-of-sample performance |
+- Gas-share-dependent power-price estimation with seasonal + volatility adjustments
+- Regional dispatch model (gradient-boosted regression)
+- Merit-order / supply-curve construction by plant type
+- Cross-regional correlation analysis
+- Clean spark spread net of variable O&M and carbon costs
 
-### Strategy & Risk Management
-- **Position sizing**: Volatility-targeting, Kelly criterion, fixed fractional
-- **Risk limits**: Max drawdown halt, VaR monitoring, position concentration limits
-- **ATR-based stops**: Automatic stop-loss and take-profit levels
+### 3. Portfolio Value-at-Risk
 
-### Backtesting
-- Configurable transaction costs and slippage (basis points)
-- Metrics: Sharpe, Sortino, Calmar, Max Drawdown, Win Rate, Profit Factor
-- Walk-forward validation to prevent lookahead bias
-- Benchmark comparison (strategy vs buy-and-hold)
+Six VaR methodologies on a multi-asset energy portfolio (NG=F, CL=F, UNG):
+
+- Historical Simulation, Parametric (Normal), Parametric (Student-t), Cornish-Fisher, EWMA, Monte Carlo
+- Component VaR — marginal contribution of each position
+- **6 energy-specific stress scenarios** — polar vortex, hurricane season, pipeline disruption, demand destruction, LNG export surge, storage surprise
+- **Kupiec backtesting** to validate VaR model calibration
+
+### 4. Demand & Generation Forecasting
+
+- **Electricity demand** — XGBoost (R²=0.91) and LSTM (R²=0.70) using weather, calendar, and economic features
+- **Wind generation** — XGBoost regressor (R²=0.50, 75-fold expanding-window CV) across 4 regions
+- **NG production direction** — XGBoost classifier (81% accuracy, F1=0.83, 25pp above base rate)
+
+### 5. RAG Pipeline & Agentic Morning Briefing
+
+- **40,850 documents** ingested into a ChromaDB vector store (energy trading books, EIA reports, research papers)
+- **6-step agentic workflow**: market snapshot → storage analysis → spark-spread summary → risk metrics → RAG context retrieval → GPT-4o synthesis
+- Produces a professional morning research note with market views and trade ideas
+
+---
+
+## Key Results
+
+| Model | Metric | Result |
+|-------|--------|--------|
+| Storage – Intrinsic (Salt Cavern) | NPV | $2.98M (1.55 cycles) |
+| Storage – LSMC Total | NPV | $74.17M (96% extrinsic optionality) |
+| Spark Spread – PJM Dispatch | R² / MAPE | 0.920 / 4.5% |
+| Spark Spread – Seasonal Range | $/MWh | Jul $9.5–10 → Apr $2.5–3.3 |
+| VaR – Historical (95%, 1-day) | $10M portfolio | $906K |
+| VaR – Kupiec Backtest | 95% confidence | Accepted (p=0.09) |
+| Demand Forecast – XGBoost | R² | 0.91 |
+| Demand Forecast – LSTM | R² | 0.70 |
+| Wind Gen Forecast | R² / MAPE | 0.50 / 34.5% |
+| NG Production Direction | Accuracy / F1 | 81% / 0.83 |
+
+**Notable negative result**: Direct price prediction across 5 energy instruments failed to beat a random walk. A two-stage demand→price ablation showed demand features *hurt* price accuracy by −1.31%. This is consistent with semi-strong market efficiency — public fundamental data is already priced in.
 
 ---
 
@@ -131,85 +142,89 @@ Energy Trading AI is a production-quality quantitative research and algorithmic 
 
 ```
 energy-trading-ai/
-├── README.md
-├── pyproject.toml
-├── requirements.txt
-├── .env.example
-├── .gitignore
+├── app/
+│   └── dashboard.py                  # 5-tab Streamlit dashboard
 ├── config/
-│   └── settings.yaml              # Central configuration
+│   └── settings.yaml                 # Central configuration
 ├── data/
-│   ├── raw/                       # Downloaded data (gitignored)
-│   ├── processed/                 # Feature matrices (gitignored)
-│   └── documents/                 # PDFs for RAG (gitignored)
+│   ├── raw/                          # Downloaded data (gitignored)
+│   ├── processed/                    # Feature matrices (gitignored)
+│   └── documents/                    # PDFs for RAG (gitignored)
+├── models/                           # Trained model artifacts (gitignored)
 ├── src/
-│   ├── data/                      # Data ingestion modules
-│   │   ├── price_fetcher.py       # yfinance wrapper
-│   │   ├── eia_client.py          # EIA API client
-│   │   ├── fred_client.py         # FRED API client
-│   │   ├── weather_client.py      # NOAA weather client
-│   │   └── news_fetcher.py        # NewsAPI + RSS fetcher
-│   ├── features/                  # Feature engineering
-│   │   ├── technical.py           # Technical indicators
-│   │   ├── fundamental.py         # Fundamental features
-│   │   ├── macro.py               # Macro features
-│   │   ├── seasonal.py            # Seasonal features
-│   │   └── pipeline.py            # Feature pipeline orchestrator
-│   ├── nlp/                       # Sentiment analysis
-│   │   ├── sentiment.py           # FinBERT sentiment analyser
-│   │   ├── news_processor.py      # Article cleaning & dedup
-│   │   └── sentiment_index.py     # Daily sentiment index
-│   ├── rag/                       # RAG/LLM pipeline
-│   │   ├── document_loader.py     # PDF loader
-│   │   ├── chunker.py             # Text chunking
-│   │   ├── embeddings.py          # Embedding generation
-│   │   ├── vector_store.py        # ChromaDB/FAISS store
-│   │   ├── retriever.py           # Semantic retrieval
-│   │   ├── llm_client.py          # OpenAI/Ollama client
-│   │   ├── qa_chain.py            # RAG QA chain
-│   │   └── signal_generator.py    # LLM trading signals
-│   ├── models/                    # ML/DL models
-│   │   ├── base.py                # Abstract base model
-│   │   ├── lstm_model.py          # LSTM (PyTorch)
-│   │   ├── transformer_model.py   # Transformer (PyTorch)
-│   │   ├── xgboost_model.py       # XGBoost
-│   │   ├── ensemble.py            # Ensemble combiner
-│   │   └── training.py            # Walk-forward trainer
-│   ├── strategy/                  # Trading strategy
-│   │   ├── signals.py             # Signal generation
-│   │   ├── position_sizing.py     # Position sizing
-│   │   ├── risk_manager.py        # Risk management
-│   │   └── portfolio.py           # Portfolio management
-│   ├── backtesting/               # Backtesting engine
-│   │   ├── engine.py              # Core backtest engine
-│   │   ├── metrics.py             # Performance metrics
-│   │   └── analysis.py            # Backtest analysis
-│   └── reporting/                 # Reports & visualisations
-│       ├── morning_note.py        # LLM morning note generator
-│       └── visualizations.py      # Plotly chart utilities
-├── notebooks/                     # Jupyter exploration notebooks
+│   ├── agents/
+│   │   └── morning_briefing.py       # Agentic morning-note orchestrator
+│   ├── data/
+│   │   ├── price_fetcher.py          # yfinance wrapper
+│   │   ├── eia_client.py             # EIA v2 API client (storage, prod)
+│   │   ├── eia_generation_client.py  # EIA hourly→daily generation data
+│   │   ├── fred_client.py            # FRED API client
+│   │   ├── weather_client.py         # NOAA weather client
+│   │   └── news_fetcher.py           # NewsAPI + RSS fetcher
+│   ├── features/
+│   │   ├── technical.py              # RSI, MACD, Bollinger, ATR, OBV, …
+│   │   ├── fundamental.py            # Storage surprise, rig count, curve shape
+│   │   ├── macro.py                  # DXY, VIX regime, yield curve
+│   │   ├── seasonal.py               # Cyclical encodings, HDD/CDD seasons
+│   │   └── pipeline.py               # Feature pipeline orchestrator
+│   ├── models/
+│   │   ├── load_forecaster.py        # XGBoost demand forecasting
+│   │   ├── lstm_model.py             # LSTM demand forecasting
+│   │   ├── xgboost_model.py          # XGBoost (general)
+│   │   ├── transformer_model.py      # Transformer (PyTorch)
+│   │   └── training.py               # Walk-forward trainer
+│   ├── nlp/
+│   │   ├── sentiment.py              # FinBERT sentiment analyser
+│   │   ├── news_processor.py         # Article cleaning & dedup
+│   │   └── sentiment_index.py        # Rolling sentiment index
+│   ├── rag/
+│   │   ├── document_loader.py        # PDF loader (PyMuPDF)
+│   │   ├── chunker.py                # Text chunking
+│   │   ├── embeddings.py             # Sentence-transformer embeddings
+│   │   ├── vector_store.py           # ChromaDB / FAISS
+│   │   ├── retriever.py              # Semantic retrieval
+│   │   ├── llm_client.py             # OpenAI / Ollama LLM client
+│   │   ├── qa_chain.py               # RAG QA chain
+│   │   └── signal_generator.py       # LLM-based trading signals
+│   ├── reporting/
+│   │   ├── morning_note.py           # LLM morning note generator
+│   │   └── visualizations.py         # Plotly chart utilities
+│   └── strategy/
+│       ├── storage_valuation.py      # OU, LP intrinsic, LSMC extrinsic, Greeks
+│       ├── spark_spread.py           # Regional spark-spread & dispatch model
+│       ├── var_model.py              # 6-method VaR, stress tests, Kupiec
+│       ├── signals.py                # Trading signal generation
+│       ├── position_sizing.py        # Vol-targeting, Kelly, fixed fractional
+│       ├── risk_manager.py           # Risk limits & monitoring
+│       └── portfolio.py              # Portfolio management
+├── scripts/
+│   ├── ingest_data.py                # Download price & fundamental data
+│   ├── ingest_demand_data.py         # EIA demand data ingestion
+│   ├── ingest_generation_data.py     # EIA generation data ingestion
+│   ├── build_features.py             # Build feature matrices
+│   ├── build_vector_store.py         # Ingest PDFs → ChromaDB
+│   ├── train_load_model.py           # Train demand forecasting models
+│   ├── train_wind_model.py           # Train wind generation model
+│   ├── train_ng_production_model.py  # Train NG production direction model
+│   ├── run_storage_valuation.py      # Run storage valuation engine
+│   ├── run_spark_spread.py           # Run spark-spread analysis
+│   ├── run_var_model.py              # Run VaR & stress testing
+│   ├── generate_morning_briefing.py  # Generate agentic morning note
+│   └── run_backtest.py               # Backtesting engine
+├── notebooks/                        # Jupyter exploration notebooks
 │   ├── 01_data_exploration.ipynb
 │   ├── 02_feature_engineering.ipynb
 │   ├── 03_sentiment_analysis.ipynb
 │   ├── 04_rag_pipeline.ipynb
 │   ├── 05_model_training.ipynb
 │   └── 06_backtesting.ipynb
-├── scripts/                       # CLI automation scripts
-│   ├── ingest_data.py
-│   ├── build_features.py
-│   ├── build_vector_store.py
-│   ├── train_models.py
-│   ├── run_backtest.py
-│   └── generate_report.py
-├── app/
-│   └── dashboard.py               # Streamlit dashboard
-├── tests/                         # Unit test suite
+├── tests/                            # Unit tests
 ├── docker/
 │   ├── Dockerfile
 │   └── docker-compose.yml
-└── .github/
-    └── workflows/
-        └── ci.yml                 # GitHub Actions CI
+├── pyproject.toml
+├── requirements.txt
+└── LICENSE
 ```
 
 ---
@@ -217,7 +232,7 @@ energy-trading-ai/
 ## Setup
 
 ### Prerequisites
-- Python 3.10 or higher
+- Python 3.10+
 - Git
 
 ### 1. Clone and Install
@@ -226,14 +241,10 @@ energy-trading-ai/
 git clone https://github.com/AndrewFSee/energy-trading-ai.git
 cd energy-trading-ai
 
-# Create virtual environment
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
-# Install dependencies
 pip install -r requirements.txt
-
-# Install development dependencies
 pip install -e ".[dev]"
 ```
 
@@ -241,26 +252,25 @@ pip install -e ".[dev]"
 
 ```bash
 cp .env.example .env
-# Edit .env and add your API keys
+# Edit .env with your keys
 ```
 
-| API Key Variable | Required | Free Registration |
-|-----------------|----------|-------------------|
+| Variable | Required | Registration |
+|----------|----------|--------------|
 | `EIA_API_KEY` | Yes | https://www.eia.gov/opendata/register.php |
 | `FRED_API_KEY` | Yes | https://fred.stlouisfed.org/docs/api/api_key.html |
-| `NEWS_API_KEY` | Recommended | https://newsapi.org/register |
+| `OPENAI_API_KEY` | For morning note | https://platform.openai.com/api-keys |
+| `NEWS_API_KEY` | Optional | https://newsapi.org/register |
 | `NOAA_API_KEY` | Optional | https://www.ncdc.noaa.gov/cdo-web/token |
-| `OPENAI_API_KEY` | Optional | https://platform.openai.com/api-keys |
 
-> **Note**: yfinance price data requires no API key. RSS news feeds also require no key.
+> yfinance price data and RSS news feeds require no API key.
 
-### 3. Using Docker (Recommended for Production)
+### 3. Docker (optional)
 
 ```bash
 cd docker
 docker compose up -d
-# Dashboard: http://localhost:8501
-# ChromaDB: http://localhost:8000
+# Dashboard → http://localhost:8501
 ```
 
 ---
@@ -268,126 +278,89 @@ docker compose up -d
 ## Quick Start
 
 ```bash
-# 1. Download all data
+# Ingest price and fundamental data
 python scripts/ingest_data.py --start 2015-01-01
+python scripts/ingest_demand_data.py
+python scripts/ingest_generation_data.py
 
-# 2. Build feature matrix
-python scripts/build_features.py --instrument wti
-
-# 3. Build RAG vector store (add PDFs to data/documents/ first)
+# Build RAG vector store (place PDFs in data/documents/ first)
 python scripts/build_vector_store.py
 
-# 4. Train models
-python scripts/train_models.py --instrument wti
+# Train forecasting models
+python scripts/train_load_model.py
+python scripts/train_wind_model.py
+python scripts/train_ng_production_model.py
 
-# 5. Run backtest
-python scripts/run_backtest.py --instrument wti --start 2020-01-01
+# Run quant models
+python scripts/run_storage_valuation.py
+python scripts/run_spark_spread.py
+python scripts/run_var_model.py
 
-# 6. Generate morning note
-python scripts/generate_report.py --print-only
+# Generate AI morning note
+python scripts/generate_morning_briefing.py
 
-# 7. Launch dashboard
+# Launch dashboard
 streamlit run app/dashboard.py
 ```
 
 ---
 
+## Dashboard
+
+The Streamlit dashboard (`app/dashboard.py`) provides five tabs:
+
+| Tab | Contents |
+|-----|----------|
+| **Price & Technicals** | Candlestick chart, Bollinger Bands, volume, return distribution |
+| **Storage Valuation** | OU parameters, seasonal forward curve, intrinsic LP schedule, LSMC value, Greeks |
+| **Spark Spreads** | 4-region KPIs, 21-day rolling spreads, seasonal heatmap, merit order, plant-type profitability, cross-region correlation |
+| **VaR & Risk** | 6-method comparison (1d + 10d), confidence ladder, stress-scenario waterfall, Kupiec backtest results |
+| **AI Morning Note** | GPT-4o-generated research note synthesising all model outputs with trade ideas |
+
+Run with: `streamlit run app/dashboard.py`
+
+---
+
 ## Data Sources
 
-| Source | Data Type | URL |
-|--------|-----------|-----|
-| yfinance | Price OHLCV | Automatic via library |
-| EIA Open Data | Storage, production, trade | https://www.eia.gov/opendata/ |
-| FRED | Macro indicators | https://fred.stlouisfed.org/ |
-| NOAA CDO | HDD/CDD weather | https://www.ncdc.noaa.gov/cdo-web/webservices/v2 |
-| NewsAPI | Energy news | https://newsapi.org/ |
-| Reuters RSS | Financial news | https://feeds.reuters.com/reuters/businessNews |
-| EIA RSS | Energy headlines | https://www.eia.gov/rss/todayinenergy.xml |
+| Source | Data | API |
+|--------|------|-----|
+| **yfinance** | NG=F, CL=F, UNG, VIX, DXY, S&P 500 | No key needed |
+| **EIA v2** | Storage, production, hourly generation (4 regions × 3 fuels) | Free key |
+| **FRED** | Fed funds, CPI, GDP, industrial production, yield curve | Free key |
+| **NOAA** | HDD/CDD, wind speed, temperature | Free key |
+| **NewsAPI + RSS** | Energy market headlines | Free key (optional) |
 
 ---
 
-## RAG/LLM Setup
+## RAG / LLM Setup
 
-**Option A: Local embeddings + OpenAI LLM**
+The RAG pipeline supports three configurations:
+
+**Local embeddings + OpenAI LLM** (recommended):
 ```bash
-# Generate embeddings locally (free)
 python scripts/build_vector_store.py --embedding-provider sentence-transformers
-# Requires OPENAI_API_KEY in .env for LLM generation
+# Requires OPENAI_API_KEY for GPT-4o generation
 ```
 
-**Option B: Fully local (Ollama)**
+**Fully local (Ollama)**:
 ```bash
-# Install Ollama: https://ollama.ai/
 ollama pull llama3
-# Set OLLAMA_BASE_URL in .env
-python scripts/generate_report.py --llm-provider ollama
+python scripts/generate_morning_briefing.py --llm-provider ollama
 ```
 
-**Option C: Full OpenAI**
+**Full OpenAI**:
 ```bash
 python scripts/build_vector_store.py --embedding-provider openai
-python scripts/generate_report.py --llm-provider openai
+python scripts/generate_morning_briefing.py --llm-provider openai
 ```
-
----
-
-## Recommended Books and Reports
-
-Place PDFs in `data/documents/` to include them in the RAG knowledge base.
-
-### Energy Markets and Trading (Core Domain)
-1. *Energy Trading & Investing* — Davis W. Edwards
-2. *The Handbook of Energy Trading* — Stefano Fiorenzani
-3. *Oil 101* — Morgan Downey
-4. *The Quest: Energy, Security, and the Remaking of the Modern World* — Daniel Yergin
-5. *The Prize: The Epic Quest for Oil, Money & Power* — Daniel Yergin
-6. *Natural Gas Trading in North America* — Fletcher J. Sturm
-7. *Fundamentals of Oil & Gas Accounting* — Charlotte Wright
-
-### Quantitative Finance and Trading
-8. *Advances in Financial Machine Learning* — Marcos López de Prado
-9. *Machine Learning for Asset Managers* — Marcos López de Prado
-10. *Trading and Exchanges: Market Microstructure for Practitioners* — Larry Harris
-11. *Quantitative Trading* — Ernest Chan
-12. *Algorithmic Trading* — Ernest Chan
-13. *Options, Futures, and Other Derivatives* — John C. Hull
-14. *Dynamic Hedging* — Nassim Nicholas Taleb
-
-### Machine Learning and Deep Learning
-15. *Deep Learning* — Ian Goodfellow et al.
-16. *Hands-On Machine Learning with Scikit-Learn, Keras, and TensorFlow* — Aurélien Géron
-17. *Time Series Forecasting in Python* — Marco Peixeiro
-18. *Forecasting: Principles and Practice* — Hyndman & Athanasopoulos
-
-### Free Reports and PDFs
-| Report | Frequency | URL |
-|--------|-----------|-----|
-| EIA Short-Term Energy Outlook | Monthly | https://www.eia.gov/outlooks/steo/ |
-| EIA Annual Energy Outlook | Annual | https://www.eia.gov/outlooks/aeo/ |
-| OPEC Monthly Oil Market Report | Monthly | https://www.opec.org/opec_web/en/publications/338.htm |
-| OPEC World Oil Outlook | Annual | https://www.opec.org/opec_web/en/publications/340.htm |
-| IEA Oil Market Report | Monthly | https://www.iea.org/topics/oil-market-report |
-| BP Statistical Review of World Energy | Annual | https://www.bp.com/en/global/corporate/energy-economics/statistical-review-of-world-energy.html |
-
----
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Write tests for your changes
-4. Ensure all tests pass: `pytest tests/`
-5. Lint your code: `ruff check .`
-6. Submit a pull request
 
 ---
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+MIT — see [LICENSE](LICENSE).
 
 ---
 
-> **Disclaimer**: This software is for educational and research purposes only. It is not financial advice. Energy markets are highly volatile and trading involves substantial risk of loss. Past backtest performance does not guarantee future results.
+> **Disclaimer**: This software is for educational and research purposes only. It is not financial advice. Energy markets are highly volatile and trading involves substantial risk of loss.
