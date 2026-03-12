@@ -1,20 +1,19 @@
-"""Composite Natural Gas Investment Signal System.
+"""Composite Natural Gas Trading Signal System.
 
-Combines multiple structural edges into a single INVEST / STAY-OUT signal:
+Combines multiple structural edges into a LONG / FLAT / SHORT signal:
 
 1. **Regime detection** -- Hidden Markov Model classifies market into
    low-vol (risk-on) / high-vol (risk-off) states.
 2. **Storage anomaly** -- NG storage vs 5-year seasonal average. Large
-   deficits are bullish; large surpluses keep us out.
+   deficits are bullish; large surpluses are bearish.
 3. **Seasonal positioning** -- statistically significant monthly return
-   patterns (buy spring shoulder, stay out pre-winter).
+   patterns (buy spring shoulder, short pre-winter).
 4. **Technical trend / momentum** -- trend-following via MA crossover,
    RSI, and 20-day return momentum.
-5. **Composite score** -- weighted sum of sub-signals, mapped to
-   INVEST (+1) / STAY-OUT (0) with volatility-targeted position sizing.
-
-This is NOT price-level prediction.  It identifies conditions that
-historically favour being long natural gas vs staying in cash.
+5. **Mean reversion** -- z-score vs 200-day SMA. NG is well-documented
+   as mean-reverting (OU process). Buy oversold, short overbought.
+6. **Composite score** -- weighted sum of sub-signals with
+   conviction-scaled position sizing and trailing stops.
 """
 
 from __future__ import annotations
@@ -37,7 +36,7 @@ logger = logging.getLogger(__name__)
 class CompositeSignalConfig:
     """Tunable parameters for the composite signal."""
 
-    # Regime detection — 2-state (low-vol / high-vol)
+    # Regime detection -- 2-state (low-vol / high-vol)
     hmm_n_states: int = 2
     hmm_lookback: int = 504  # 2 years of training data for rolling fit
     hmm_vol_window: int = 21  # realised vol window
@@ -58,22 +57,34 @@ class CompositeSignalConfig:
     rsi_os: float = 30.0  # oversold
     momentum_window: int = 20  # return momentum lookback
 
+    # Mean reversion (NEW)
+    mr_lookback: int = 200  # SMA lookback for mean-reversion z-score
+    mr_zscore_long: float = -1.0  # buy when price 1 sigma below SMA
+    mr_zscore_short: float = 1.0  # sell when price 1 sigma above SMA
+
     # Composite weights (must sum to 1)
-    w_regime: float = 0.20
-    w_storage: float = 0.25
-    w_seasonal: float = 0.20
-    w_technical: float = 0.35
+    w_regime: float = 0.15
+    w_storage: float = 0.15
+    w_seasonal: float = 0.15
+    w_technical: float = 0.30
+    w_mean_reversion: float = 0.25
 
     # Signal thresholds
-    long_threshold: float = 0.10
-    short_threshold: float = -0.25  # harder to short (asymmetric NG risk)
-    long_only: bool = True  # INVEST / STAY-OUT (no shorting)
+    long_threshold: float = 0.05  # low bar -- conviction sizing does the work
+    short_threshold: float = -0.15  # short only when clearly bearish
+    long_only: bool = False  # LONG / SHORT / FLAT
 
     # Risk management
-    vol_target: float = 0.25  # annualised vol target for position sizing
+    vol_target: float = 0.40  # annualised vol target for position sizing
     vol_lookback: int = 63  # 3-month realised vol for sizing
     max_short_size: float = 0.50  # cap short positions at 50% of long
-    vol_risk_off_pctile: float = 0.90  # go FLAT above this vol percentile
+    vol_risk_off_pctile: float = 0.93  # go FLAT above this vol percentile
+    min_position_frac: float = 0.40  # floor: even weak signals get 40% sizing
+
+    # Trailing stops (0 = disabled)
+    trailing_stop_long: float = 0.0
+    trailing_stop_short: float = 0.0
+    stop_cooldown_days: int = 10
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +357,40 @@ class TechnicalSignal:
 
 
 # ---------------------------------------------------------------------------
+# Sub-signal: Mean Reversion (z-score vs SMA)
+# ---------------------------------------------------------------------------
+
+class MeanReversionSignal:
+    """Mean-reversion signal based on z-score vs long-term SMA.
+
+    NG is well-documented as mean-reverting (OU process).  When price
+    deviates significantly from its 200-day SMA, it tends to revert.
+    The signal is the *negative* z-score, smoothly scaled:
+    - price well below SMA (z < -1) -> bullish (buy the dip)
+    - price well above SMA (z > +1) -> bearish (fade the spike)
+    """
+
+    def __init__(self, lookback: int = 200,
+                 z_long: float = -1.0, z_short: float = 1.0) -> None:
+        self.lookback = lookback
+        self.z_long = z_long
+        self.z_short = z_short
+
+    def compute(self, prices: pd.Series) -> pd.Series:
+        """Compute mean-reversion signal."""
+        sma = prices.rolling(self.lookback).mean()
+        std = prices.rolling(self.lookback).std()
+        zscore = (prices - sma) / std.replace(0, np.nan)
+        zscore = zscore.fillna(0.0)
+
+        # Smooth response: negative z-score = bullish, positive = bearish
+        # Scale so z = -2 -> signal +1, z = +2 -> signal -1
+        signal = (-zscore / 2.0).clip(-1.0, 1.0)
+        signal.name = "mean_reversion_signal"
+        return signal
+
+
+# ---------------------------------------------------------------------------
 # Composite Signal Aggregator
 # ---------------------------------------------------------------------------
 
@@ -353,8 +398,8 @@ class CompositeSignalEngine:
     """Aggregates sub-signals into a final LONG / FLAT / SHORT signal.
 
     All sub-signals are computed using only data available at each point
-    (no lookahead). The composite score is a weighted sum mapped to
-    a discrete position.
+    (no lookahead). The composite score drives conviction-scaled position
+    sizing, with trailing stops and a cooldown after stop-outs.
     """
 
     def __init__(self, config: CompositeSignalConfig | None = None) -> None:
@@ -398,7 +443,7 @@ class CompositeSignalEngine:
         else:
             storage_signal = pd.Series(0.0, index=prices.index, name="storage_signal")
             w_storage = 0.0
-            logger.warning("No storage data — storage weight redistributed")
+            logger.warning("No storage data -- storage weight redistributed")
 
         # --- Seasonal ---
         seasonal_sig = SeasonalSignal(lookback_years=self.cfg.seasonal_lookback_years)
@@ -415,6 +460,14 @@ class CompositeSignalEngine:
         )
         tech_signal = tech_sig.compute(prices)
 
+        # --- Mean Reversion ---
+        mr_sig = MeanReversionSignal(
+            lookback=self.cfg.mr_lookback,
+            z_long=self.cfg.mr_zscore_long,
+            z_short=self.cfg.mr_zscore_short,
+        )
+        mr_signal = mr_sig.compute(prices)
+
         # --- Align all to price index ---
         regime_signal = regime_df["regime_signal"].reindex(prices.index).fillna(0.0)
 
@@ -422,14 +475,17 @@ class CompositeSignalEngine:
         w_regime = self.cfg.w_regime
         w_seasonal = self.cfg.w_seasonal
         w_technical = self.cfg.w_technical
+        w_mr = self.cfg.w_mean_reversion
 
         # Redistribute storage weight if absent
         if w_storage == 0.0:
-            total_other = w_regime + w_seasonal + w_technical
+            total_other = w_regime + w_seasonal + w_technical + w_mr
             if total_other > 0:
-                w_regime *= 1.0 / total_other
-                w_seasonal *= 1.0 / total_other
-                w_technical *= 1.0 / total_other
+                scale = 1.0 / total_other
+                w_regime *= scale
+                w_seasonal *= scale
+                w_technical *= scale
+                w_mr *= scale
 
         # --- Composite score ---
         composite = (
@@ -437,6 +493,7 @@ class CompositeSignalEngine:
             + w_storage * storage_signal
             + w_seasonal * seasonal_signal
             + w_technical * tech_signal
+            + w_mr * mr_signal
         )
 
         # --- Map to discrete signal ---
@@ -445,30 +502,38 @@ class CompositeSignalEngine:
         if not self.cfg.long_only:
             signal[composite <= self.cfg.short_threshold] = -1
 
-        # --- Risk management: volatility targeting + asymmetric sizing ---
+        # --- Risk management: volatility targeting ---
         log_ret = np.log(prices / prices.shift(1))
         realised_vol = log_ret.rolling(self.cfg.vol_lookback).std() * np.sqrt(252)
         realised_vol = realised_vol.bfill().clip(lower=0.05)
 
-        # Vol-target scalar: target_vol / realised_vol, capped at 1.0
-        vol_scalar = (self.cfg.vol_target / realised_vol).clip(upper=1.0)
+        # Vol-target scalar
+        vol_scalar = (self.cfg.vol_target / realised_vol).clip(upper=1.5)
 
         # Risk-off filter: go FLAT when realised vol exceeds threshold
-        # Use expanding rank to avoid lookahead
         vol_rank = realised_vol.expanding(min_periods=252).rank(pct=True)
         risk_off_mask = vol_rank > self.cfg.vol_risk_off_pctile
         signal[risk_off_mask] = 0
 
-        # Position size: apply vol scalar + asymmetric short cap
-        position_size = signal.astype(float) * vol_scalar
+        # --- Conviction-scaled position sizing ---
+        # Map |composite_score| to [min_position_frac, 1.0] range so even
+        # marginal signals get a meaningful position, strong signals go full.
+        raw_conviction = composite.abs().clip(upper=0.8)
+        floor = self.cfg.min_position_frac
+        conviction = floor + (1.0 - floor) * (raw_conviction / 0.8)
+        position_size = signal.astype(float) * conviction * vol_scalar
         if not self.cfg.long_only:
-            # Cap shorts
             position_size = position_size.clip(
-                lower=-self.cfg.max_short_size,
-                upper=1.0,
+                lower=-self.cfg.max_short_size, upper=1.0,
             )
         else:
             position_size = position_size.clip(lower=0.0, upper=1.0)
+
+        # --- Trailing stops with cooldown ---
+        if self.cfg.trailing_stop_long > 0 or self.cfg.trailing_stop_short > 0:
+            signal, position_size = self._apply_trailing_stops(
+                prices, signal, position_size,
+            )
 
         # --- Assemble output ---
         result = pd.DataFrame({
@@ -477,6 +542,7 @@ class CompositeSignalEngine:
             "storage_signal": storage_signal,
             "seasonal_signal": seasonal_signal,
             "technical_signal": tech_signal,
+            "mean_reversion_signal": mr_signal,
             "composite_score": composite,
             "signal": signal,
             "realised_vol": realised_vol,
@@ -496,3 +562,70 @@ class CompositeSignalEngine:
         )
 
         return result
+
+    # ------------------------------------------------------------------
+    # Trailing stops
+    # ------------------------------------------------------------------
+
+    def _apply_trailing_stops(
+        self,
+        prices: pd.Series,
+        signal: pd.Series,
+        position_size: pd.Series,
+    ) -> tuple[pd.Series, pd.Series]:
+        """Apply trailing stops with cooldown after stop-out.
+
+        When a position's unrealised loss from its peak (long) or trough
+        (short) exceeds the trailing stop threshold, the position is closed
+        and no new position is taken for ``stop_cooldown_days``.
+        """
+        sig = signal.copy()
+        ps = position_size.copy()
+        cfg = self.cfg
+
+        current_dir = 0  # 0=flat, 1=long, -1=short
+        peak = 0.0
+        trough = float("inf")
+        cooldown_remaining = 0
+
+        for i in range(len(sig)):
+            price = prices.iloc[i]
+            raw_signal = sig.iloc[i]
+
+            # Cooldown: force flat
+            if cooldown_remaining > 0:
+                sig.iloc[i] = 0
+                ps.iloc[i] = 0.0
+                cooldown_remaining -= 1
+                if cooldown_remaining == 0:
+                    current_dir = 0
+                continue
+
+            # Check trailing stop on existing position
+            if current_dir == 1:
+                peak = max(peak, price)
+                dd = (price - peak) / peak
+                if dd < -cfg.trailing_stop_long:
+                    sig.iloc[i] = 0
+                    ps.iloc[i] = 0.0
+                    current_dir = 0
+                    cooldown_remaining = cfg.stop_cooldown_days
+                    continue
+            elif current_dir == -1:
+                trough = min(trough, price)
+                runup = (price - trough) / trough if trough > 0 else 0.0
+                if runup > cfg.trailing_stop_short:
+                    sig.iloc[i] = 0
+                    ps.iloc[i] = 0.0
+                    current_dir = 0
+                    cooldown_remaining = cfg.stop_cooldown_days
+                    continue
+
+            # Track direction changes
+            new_dir = int(raw_signal)
+            if new_dir != current_dir:
+                current_dir = new_dir
+                peak = price
+                trough = price
+
+        return sig, ps

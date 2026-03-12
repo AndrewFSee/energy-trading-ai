@@ -234,12 +234,24 @@ def print_results(
 
     # --- Sub-signal contribution ---
     print("\n" + "-" * 50)
-    print("  SUB-SIGNAL MEANS (when INVEST)")
+    print("  SUB-SIGNAL MEANS (when LONG)")
     print("-" * 50)
     long_mask = signal_df["signal"] == 1
     if long_mask.any():
-        for col in ["regime_signal", "storage_signal", "seasonal_signal", "technical_signal"]:
-            print(f"  {col:<25} {signal_df.loc[long_mask, col].mean():.3f}")
+        for col in ["regime_signal", "storage_signal", "seasonal_signal",
+                     "technical_signal", "mean_reversion_signal"]:
+            if col in signal_df.columns:
+                print(f"  {col:<30} {signal_df.loc[long_mask, col].mean():+.3f}")
+
+    short_mask = signal_df["signal"] == -1
+    if short_mask.any():
+        print("\n" + "-" * 50)
+        print("  SUB-SIGNAL MEANS (when SHORT)")
+        print("-" * 50)
+        for col in ["regime_signal", "storage_signal", "seasonal_signal",
+                     "technical_signal", "mean_reversion_signal"]:
+            if col in signal_df.columns:
+                print(f"  {col:<30} {signal_df.loc[short_mask, col].mean():+.3f}")
 
     # --- Walk-forward fold results ---
     if fold_metrics:
