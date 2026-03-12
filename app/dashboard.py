@@ -90,6 +90,16 @@ def load_generation() -> pd.DataFrame:
     return pd.read_csv(path, parse_dates=["datetime"]).set_index("datetime").sort_index()
 
 
+@st.cache_data(ttl=600)
+def load_composite_signals() -> pd.DataFrame:
+    """Load pre-computed composite investment signals."""
+    path = ROOT / "data" / "processed" / "composite_signals.csv"
+    if not path.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(path, parse_dates=["date"]).set_index("date").sort_index()
+    return df
+
+
 @st.cache_data(ttl=3600, show_spinner="Running storage valuation ...")
 def run_storage_valuation(facility: str, n_paths: int):
     """Run full storage valuation pipeline."""
@@ -285,11 +295,12 @@ st.markdown("---")
 # ======================================================================
 # TABS
 # ======================================================================
-tab_price, tab_storage, tab_spark, tab_var, tab_note = st.tabs([
-    "ðŸ“ˆ Price & Technicals",
-    "ðŸ—ï¸ Storage Valuation",
-    "ðŸ”¥ Spark Spreads",
-    "âš ï¸ VaR & Risk",
+tab_price, tab_storage, tab_spark, tab_var, tab_signal, tab_note = st.tabs([
+    "ðŸ"ˆ Price & Technicals",
+    "ðŸ—ï¸ Storage Valuation",
+    "ðŸ"¥ Spark Spreads",
+    "âš ï¸ VaR & Risk",
+    "ðŸŽ¯ NG Investment Signal",
     "ðŸ§  AI Morning Note",
 ])
 
@@ -736,6 +747,136 @@ with tab_var:
                 b2.metric("Rate", f"{bt['exceedance_rate']*100:.2f}%")
                 b3.metric("Kupiec LR", f"{bt['kupiec_lr_stat']:.2f}")
                 b4.metric("p-value", f"{bt['kupiec_p_value']:.4f}")
+
+
+
+
+# -----------------------------------------------------------------------
+# TAB 5 -- NG Investment Signal
+# -----------------------------------------------------------------------
+with tab_signal:
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots as _make_subplots
+
+    st.subheader("Composite NG Investment Signal")
+    st.caption(
+        "HMM regime detection + storage anomaly + seasonal patterns + "
+        "technical trend/momentum.  Signal: INVEST (green) or STAY OUT (grey)."
+    )
+
+    sig_df = load_composite_signals()
+    if sig_df.empty:
+        st.warning(
+            "No signal data found.  Run `python scripts/run_composite_signal.py` first."
+        )
+    else:
+        # ---- Current signal banner ----
+        latest = sig_df.iloc[-1]
+        current_signal = "INVEST" if latest["signal"] == 1 else "STAY OUT"
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Current Signal", current_signal)
+        c2.metric("Composite Score", f"{latest['composite_score']:.3f}")
+        c3.metric("Position Size", f"{latest['position_size']:.0%}")
+        c4.metric("Realised Vol", f"{latest['realised_vol']:.0%}")
+
+        # ---- Sub-signal gauges ----
+        st.markdown("**Sub-signal values (latest):**")
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("Regime (HMM)", f"{latest['regime_signal']:+.2f}")
+        s2.metric("Storage Anomaly", f"{latest['storage_signal']:+.2f}")
+        s3.metric("Seasonal", f"{latest['seasonal_signal']:+.2f}")
+        s4.metric("Technical", f"{latest['technical_signal']:+.2f}")
+
+        st.markdown("---")
+
+        # ---- Price + signal overlay chart ----
+        sig_years = st.slider("Signal lookback (years)", 1, 20, 5, key="sig_lb")
+        cutoff = sig_df.index[-1] - pd.DateOffset(years=sig_years)
+        plot_df = sig_df.loc[cutoff:]
+
+        fig = _make_subplots(
+            rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.04,
+            row_heights=[0.50, 0.25, 0.25],
+            subplot_titles=["NG Price + Signal Overlay", "Composite Score", "Sub-Signals"],
+        )
+
+        # Price line
+        fig.add_trace(
+            go.Scatter(x=plot_df.index, y=plot_df["price"], mode="lines",
+                       name="NG Close", line=dict(color="#636EFA", width=1.5)),
+            row=1, col=1,
+        )
+
+        # Shade INVEST periods green
+        invest_mask = plot_df["signal"] == 1
+        invest_periods = []
+        in_period = False
+        for i, (dt, val) in enumerate(invest_mask.items()):
+            if val and not in_period:
+                start = dt
+                in_period = True
+            elif not val and in_period:
+                invest_periods.append((start, invest_mask.index[i - 1]))
+                in_period = False
+        if in_period:
+            invest_periods.append((start, invest_mask.index[-1]))
+
+        for s, e in invest_periods:
+            fig.add_vrect(
+                x0=s, x1=e, fillcolor="rgba(0,200,0,0.12)", line_width=0,
+                row=1, col=1,
+            )
+
+        # Composite score
+        fig.add_trace(
+            go.Scatter(x=plot_df.index, y=plot_df["composite_score"], mode="lines",
+                       name="Composite", line=dict(color="#AB63FA", width=1.2)),
+            row=2, col=1,
+        )
+        fig.add_hline(y=0.10, line_dash="dot", line_color="green",
+                       annotation_text="Long threshold", row=2, col=1)
+        fig.add_hline(y=0, line_dash="dash", line_color="gray", row=2, col=1)
+
+        # Sub-signals
+        for col_name, clr in [
+            ("regime_signal", "#636EFA"),
+            ("storage_signal", "#EF553B"),
+            ("seasonal_signal", "#00CC96"),
+            ("technical_signal", "#FFA15A"),
+        ]:
+            fig.add_trace(
+                go.Scatter(x=plot_df.index, y=plot_df[col_name], mode="lines",
+                           name=col_name.replace("_signal", "").title(),
+                           line=dict(width=1, color=clr), opacity=0.8),
+                row=3, col=1,
+            )
+
+        fig.update_layout(height=750, showlegend=True, template="plotly_white",
+                          legend=dict(orientation="h", y=-0.05))
+        fig.update_yaxes(title_text="$/MMBtu", row=1)
+        fig.update_yaxes(title_text="Score", row=2)
+        fig.update_yaxes(title_text="Signal", row=3)
+        st.plotly_chart(fig, use_container_width=True)
+
+        # ---- Signal stats ----
+        with st.expander("Signal Statistics"):
+            invest_days = (sig_df["signal"] == 1).sum()
+            total_days = len(sig_df)
+            st.markdown(f"- **Period:** {sig_df.index[0].date()} to {sig_df.index[-1].date()}")
+            st.markdown(f"- **INVEST days:** {invest_days:,} ({100*invest_days/total_days:.1f}%)")
+            st.markdown(f"- **STAY OUT days:** {total_days - invest_days:,} ({100*(total_days-invest_days)/total_days:.1f}%)")
+            st.markdown(f"- **Current regime signal:** {latest['regime_signal']:+.2f}")
+            st.markdown(f"- **Current vol scalar:** {latest['vol_scalar']:.2f}")
+
+            # Annual signal frequency
+            annual = sig_df["signal"].resample("YE").mean()
+            st.markdown("**Annual INVEST frequency:**")
+            ann_df = pd.DataFrame({
+                "Year": annual.index.year,
+                "% Days Invested": (annual.values * 100).round(1),
+            })
+            st.dataframe(ann_df.set_index("Year").T, use_container_width=True)
 
 
 # â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
