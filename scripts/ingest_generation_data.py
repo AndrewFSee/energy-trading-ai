@@ -34,6 +34,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 load_dotenv()
 
 from src.data.eia_generation_client import EIAGenerationClient
+from src.data.eia_lmp_client import EIADemandClient
 from src.data.ng_production_client import NGProductionClient
 from src.data.openmeteo_client import OpenMeteoClient
 
@@ -51,7 +52,7 @@ PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
 def ingest_generation(start: str, end: str) -> pd.DataFrame | None:
     """Fetch daily generation by fuel type from EIA."""
     logger.info("=" * 60)
-    logger.info("STEP 1: EIA Generation Data (wind, solar, gas)")
+    logger.info("STEP 1: EIA Generation Data (all fuel types)")
     logger.info("=" * 60)
 
     try:
@@ -60,10 +61,10 @@ def ingest_generation(start: str, end: str) -> pd.DataFrame | None:
         logger.error("Cannot create EIAGenerationClient: %s", exc)
         return None
 
-    # Fetch wind, solar, and gas generation for all Eastern regions
+    # Fetch ALL fuel types for complete generation mix
     gen_df = client.fetch_daily_generation(
         regions=["PJM", "MISO", "NYIS", "ISNE"],
-        fuel_types=["WND", "SUN", "NG"],
+        fuel_types=["WND", "SUN", "NG", "NUC", "COL", "WAT", "OTH"],
         start=start,
         end=end,
     )
@@ -78,6 +79,35 @@ def ingest_generation(start: str, end: str) -> pd.DataFrame | None:
     logger.info("Saved generation data: %s (%d rows × %d cols)",
                 out_path, len(gen_df), len(gen_df.columns))
     return gen_df
+
+
+def ingest_lmp(start: str, end: str) -> pd.DataFrame | None:
+    """Fetch daily regional electricity demand from EIA."""
+    logger.info("=" * 60)
+    logger.info("STEP 1b: EIA Regional Demand Data")
+    logger.info("=" * 60)
+
+    try:
+        client = EIADemandClient()
+    except ValueError as exc:
+        logger.error("Cannot create EIADemandClient: %s", exc)
+        return None
+
+    demand_df = client.fetch_daily_demand(
+        regions=["PJM", "MISO", "NYIS", "ISNE"],
+        start=start,
+        end=end,
+    )
+
+    if demand_df.empty:
+        logger.warning("No demand data retrieved")
+        return None
+
+    out_path = RAW_DIR / "demand_daily.csv"
+    demand_df.to_csv(out_path)
+    logger.info("Saved demand data: %s (%d rows × %d cols)",
+                out_path, len(demand_df), len(demand_df.columns))
+    return demand_df
 
 
 def ingest_wind_solar_weather(start: str, end: str) -> pd.DataFrame | None:
@@ -188,6 +218,8 @@ def main() -> None:
                         help="Skip weather fetch (use cached)")
     parser.add_argument("--skip-production", action="store_true",
                         help="Skip NG production fetch (use cached)")
+    parser.add_argument("--skip-lmp", action="store_true",
+                        help="Skip LMP price fetch (use cached)")
     args = parser.parse_args()
 
     end = args.end or (datetime.now() - timedelta(days=5)).strftime("%Y-%m-%d")
@@ -205,6 +237,14 @@ def main() -> None:
         if cached.exists():
             gen_df = pd.read_csv(cached, index_col=0, parse_dates=True)
             logger.info("Loaded cached generation data: %d rows", len(gen_df))
+
+    # Step 1b: LMP prices
+    if not getattr(args, 'skip_lmp', False):
+        ingest_lmp(args.start, end)
+    else:
+        cached = RAW_DIR / "lmp_daily.csv"
+        if cached.exists():
+            logger.info("Using cached LMP data")
 
     # Step 2: Weather data
     weather_df = None

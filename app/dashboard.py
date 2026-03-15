@@ -340,41 +340,93 @@ def run_spark_spread():
 
 
 
+    # Load regional demand data if available
+
+    demand_path = ROOT / "data" / "raw" / "demand_daily.csv"
+
+    # Also check legacy filename
+
+    if not demand_path.exists():
+
+        demand_path = ROOT / "data" / "raw" / "lmp_daily.csv"
+
+    if demand_path.exists():
+
+        try:
+
+            demand = pd.read_csv(demand_path, index_col=0, parse_dates=True)
+
+            merged = merged.join(demand, how="left")
+
+        except Exception:
+
+            pass
+
+
+
     # Region mapping: generation CSV uses lowercase prefixes
 
     REGION_MAP = {"PJM": "pjm", "MISO": "miso", "NYISO": "nyis", "ISONE": "isne"}
 
+    # EIA region codes used in demand column names
+
+    EIA_REGION_MAP = {"PJM": "PJM", "MISO": "MISO", "NYISO": "NYIS", "ISONE": "ISNE"}
 
 
-    # Rename columns so SparkSpreadModel finds {REGION}_gas_mwh
+
+    # Rename columns so SparkSpreadModel finds {REGION}_gas_mwh etc.
+
+    FUEL_MAP = {
+
+        "ng": "gas", "nuc": "nuclear", "col": "coal",
+
+        "wnd": "wind", "sun": "solar", "wat": "hydro", "oth": "other",
+
+    }
 
     for label, prefix in REGION_MAP.items():
 
-        ng_col = f"{prefix}_ng_total_mwh"
+        # Rename fuel columns: pjm_ng_total_mwh → PJM_gas_mwh, etc.
 
-        if ng_col in merged.columns:
+        for eia_fuel, readable in FUEL_MAP.items():
 
-            merged.rename(columns={ng_col: f"{label}_gas_mwh"}, inplace=True)
+            src_col = f"{prefix}_{eia_fuel}_total_mwh"
 
-        # total = gas + wind + solar
+            if src_col in merged.columns:
 
-        wnd_col = f"{prefix}_wnd_total_mwh"
+                merged.rename(columns={src_col: f"{label}_{readable}_mwh"}, inplace=True)
 
-        sun_col = f"{prefix}_sun_total_mwh"
 
-        gas_col = f"{label}_gas_mwh"
 
-        parts = []
+        # Build total from all available fuel types
 
-        for c in [gas_col, wnd_col, sun_col]:
+        fuel_cols = [f"{label}_{f}_mwh" for f in FUEL_MAP.values()
 
-            if c in merged.columns:
+                     if f"{label}_{f}_mwh" in merged.columns]
 
-                parts.append(merged[c])
+        if fuel_cols:
 
-        if parts:
+            merged[f"{label}_total_mwh"] = merged[fuel_cols].sum(axis=1)
 
-            merged[f"{label}_total_mwh"] = sum(parts)
+
+
+        # Map demand columns: NYIS_demand_mean → NYISO_demand_mean
+
+        eia_code = EIA_REGION_MAP[label]
+
+        if eia_code != label:
+
+            for suffix in ["demand_mean", "demand_peak", "demand_offpeak",
+
+                           "demand_max", "demand_min", "demand_vol",
+
+                           "demand_spread"]:
+
+                src = f"{eia_code}_{suffix}"
+
+                if src in merged.columns:
+
+                    merged.rename(columns={src: f"{label}_{suffix}"}, inplace=True)
 
 
 
@@ -389,6 +441,8 @@ def run_spark_spread():
     all_hrs = {}
 
     all_merit = {}
+
+    has_demand = any(f"{r}_demand_mean" in merged.columns for r in regions)
 
     for r in regions:
 
@@ -415,6 +469,10 @@ def run_spark_spread():
         "n_days": len(merged),
 
         "date_range": (merged.index.min(), merged.index.max()),
+
+        "has_demand": has_demand,
+
+        "merged": merged,
 
     }
 
@@ -1024,11 +1082,15 @@ with tab_spark:
 
         st.subheader("Spark Spread & Heat Rate Analysis")
 
+        data_source = "generation mix + regional demand" if ss.get("has_demand") else "generation mix only"
+
         st.caption(
 
             f"{ss['n_days']} days  "
 
-            f"({ss['date_range'][0].date()} to {ss['date_range'][1].date()})"
+            f"({ss['date_range'][0].date()} to {ss['date_range'][1].date()})  ·  "
+
+            f"Power price source: **{data_source}**"
 
         )
 
@@ -1160,7 +1222,7 @@ with tab_spark:
 
         with col_merit:
 
-            st.markdown("#### Generation Mix (Gas Share by Load Level)")
+            st.markdown("#### Generation Mix by Load Level")
 
             selected_region = st.selectbox("Region", regions, key="merit_region")
 

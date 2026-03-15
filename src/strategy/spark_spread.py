@@ -226,10 +226,24 @@ class SparkSpreadModel:
         else:
             threshold_price = 20.0
 
-        # Heat rate ≈ implied power price / threshold gas price
-        # If power price is ~$40/MWh and gas becomes uneconomic at $5/MMBtu → HR ≈ 8
-        mean_power_est = df["ng_price"].mean() * HEAT_RATES["average_gas"] + self.power_premium
-        implied_hr = mean_power_est / df["ng_price"].mean() if df["ng_price"].mean() > 0 else 7.5
+        # Implied fleet heat rate based on gas share level.
+        # Higher gas share → more CTs running as marginal units → higher HR.
+        # Lower gas share → gas is mostly efficient CCGTs → lower HR.
+        mean_gas_share = df["gas_share"].mean()
+        ccgt_hr = HEAT_RATES["combined_cycle"]   # 6.6
+        ct_hr = HEAT_RATES["combustion_turbine"]  # 10.0
+        # Interpolate: at 20% gas share assume mostly CCGT, at 60%+ assume mix
+        share_frac = np.clip((mean_gas_share - 0.15) / 0.50, 0, 1)
+        implied_hr = ccgt_hr + share_frac * (ct_hr - ccgt_hr) * 0.5
+
+        # Also factor in regression sensitivity: steeper negative slope
+        # means gas dispatches more at the margin under price pressure
+        sensitivity_adj = 0.0
+        if model.coef_[0] < -0.005:
+            sensitivity_adj = min(abs(model.coef_[0]) * 10, 1.0)
+        implied_hr += sensitivity_adj
+
+        implied_hr = float(np.clip(implied_hr, 6.4, 10.5))
 
         logger.info(
             "%s: implied HR=%.1f MMBtu/MWh, gas_price_sensitivity=%.4f, threshold=$%.1f",
@@ -245,19 +259,13 @@ class SparkSpreadModel:
     ) -> pd.DataFrame:
         """Compute daily spark spreads for a region.
 
-        Since we have generation dispatch data but no wholesale power
-        prices, we estimate power prices using a gas-share-dependent
-        scarcity premium model:
-
-            P_power = HR_marginal × P_gas + base_premium × (1 + scarcity_factor)
-
-        Where the scarcity factor increases when gas units are highly
-        utilised (high gas share → tight market → higher spreads) and
-        includes seasonal and volatility adjustments.
+        Estimates regional power prices from gas share, demand, seasonal
+        patterns, and NG price volatility.  Uses actual regional demand
+        data when available for a demand-driven scarcity premium.
 
         Args:
-            data: Merged generation + price data.
-            region: Region identifier.
+            data: Merged generation + price + optional demand data.
+            region: Region identifier (PJM, MISO, NYISO, ISONE).
             heat_rate: Override heat rate.  If ``None``, uses fleet average.
 
         Returns:
@@ -283,10 +291,7 @@ class SparkSpreadModel:
             df["total_gen_mwh"] = data[total_col]
         df = df.dropna(subset=["ng_price"])
 
-        # ── Gas-share-dependent power price estimation ──────────────
-        # Gas share is a proxy for system tightness: when gas share is
-        # high, marginal gas units set price; when low, cheaper fuels
-        # (wind/solar/nuclear) are on the margin → lower spreads.
+        # ── Gas share from generation data ──────────────────────────
         if "gas_gen_mwh" in df.columns and "total_gen_mwh" in df.columns:
             df["gas_share"] = (
                 df["gas_gen_mwh"] / df["total_gen_mwh"].replace(0, np.nan)
@@ -294,13 +299,10 @@ class SparkSpreadModel:
         else:
             df["gas_share"] = 0.5
 
-        # Normalise gas share to z-score for scarcity premium
         gs_mean = df["gas_share"].mean()
         gs_std = max(df["gas_share"].std(), 0.01)
         df["gs_z"] = (df["gas_share"] - gs_mean) / gs_std
 
-        # Seasonal adjustment: power premiums wider in summer (cooling)
-        # and mid-winter (heating) vs shoulder months
         df["_month"] = df.index.month
         seasonal_premium = {
             1: 1.8, 2: 1.5, 3: 0.6, 4: 0.3, 5: 0.5, 6: 1.2,
@@ -308,51 +310,73 @@ class SparkSpreadModel:
         }
         df["seasonal_adj"] = df["_month"].map(seasonal_premium)
 
-        # Gas price volatility premium: high-vol periods → wider spreads
         df["ng_ret"] = df["ng_price"].pct_change()
         df["ng_vol_20d"] = df["ng_ret"].rolling(20, min_periods=5).std() * np.sqrt(252)
         vol_med = df["ng_vol_20d"].median()
         df["vol_premium"] = (df["ng_vol_20d"] / max(vol_med, 0.01) - 1).clip(-1, 3) * 2
 
-        # Composite scarcity premium
+        # ── Demand-driven scarcity premium (if demand data available) ─
+        demand_col = f"{region}_demand_mean"
+        if demand_col in data.columns:
+            df["_demand"] = data[demand_col]
+            dm = df["_demand"].median()
+            ds = max(df["_demand"].std(), 1)
+            df["demand_z"] = (df["_demand"] - dm) / ds
+            df["demand_premium"] = df["demand_z"].clip(-2, 3) * 2.0
+            df.drop(columns=["_demand"], inplace=True)
+        else:
+            df["demand_z"] = 0
+            df["demand_premium"] = 0
+
         df["scarcity_factor"] = (
-            df["gs_z"] * 3.0          # ±$3/MWh per σ of gas share
-            + df["seasonal_adj"]       # seasonal $/MWh
-            + df["vol_premium"]        # volatility-driven
+            df["gs_z"] * 3.0
+            + df["seasonal_adj"]
+            + df["vol_premium"]
+            + df["demand_premium"]
         )
 
-        # Power price = marginal heat rate × gas price + scarcity premium
-        df["gas_cost_mwh"] = df["ng_price"] * hr
-        df["est_power_price"] = (
-            df["gas_cost_mwh"]
+        df["power_price"] = (
+            df["ng_price"] * hr
             + self.power_premium
             + df["scarcity_factor"]
         )
 
-        # Floor: power price shouldn't go below marginal CCGT cost
         ccgt_floor = df["ng_price"] * HEAT_RATES["combined_cycle"] + VOM_COSTS["combined_cycle"]
-        df["est_power_price"] = df["est_power_price"].clip(lower=ccgt_floor)
+        df["power_price"] = df["power_price"].clip(lower=ccgt_floor)
 
-        # ── Spark spreads by plant type ─────────────────────────────
+        df.drop(columns=["gs_z", "_month", "seasonal_adj", "ng_ret",
+                         "ng_vol_20d", "vol_premium", "demand_z",
+                         "demand_premium", "scarcity_factor"],
+                inplace=True, errors="ignore")
+
+        has_demand = demand_col in data.columns
+        logger.info("%s: estimated power prices (gas_share=%.1f%%, demand=%s)",
+                    region, gs_mean * 100,
+                    "available" if has_demand else "not available")
+
+        # ── Gas cost and spark spreads ──────────────────────────────
+        # The marginal HR (hr) was used to estimate power price.
+        # The primary "spark spread" uses CCGT HR — this is the standard
+        # market definition (can a combined-cycle make money?).
+        ccgt_hr = HEAT_RATES["combined_cycle"]
+        df["gas_cost_mwh"] = df["ng_price"] * ccgt_hr
+        df["est_power_price"] = df["power_price"]
+
+        # Spark spreads by plant type
         for plant_type, plant_hr in HEAT_RATES.items():
             col_name = f"spark_{plant_type}"
             vom = VOM_COSTS.get(plant_type, 3.0)
             carbon = EMISSION_RATES.get(plant_type, 0.5) * self.carbon_price
-            df[col_name] = df["est_power_price"] - plant_hr * df["ng_price"] - vom - carbon
+            df[col_name] = df["power_price"] - plant_hr * df["ng_price"] - vom - carbon
 
-        # Primary spark spread (using implied fleet HR)
-        df["spark_spread"] = df["est_power_price"] - hr * df["ng_price"]
+        # Primary spark spread = CCGT spark (standard market convention)
+        df["spark_spread"] = df["spark_combined_cycle"]
         df["clean_spark_spread"] = (
             df["spark_spread"]
             - VOM_COSTS["combined_cycle"]
             - EMISSION_RATES["combined_cycle"] * self.carbon_price
         )
-        df["spark_ratio"] = df["est_power_price"] / (df["ng_price"] * hr).replace(0, np.nan)
-
-        # Drop working columns
-        df.drop(columns=["gs_z", "_month", "seasonal_adj", "ng_ret",
-                         "ng_vol_20d", "vol_premium", "scarcity_factor"],
-                inplace=True, errors="ignore")
+        df["spark_ratio"] = df["power_price"] / (df["ng_price"] * hr).replace(0, np.nan)
 
         logger.info(
             "%s spark spreads: mean=$%.1f/MWh, clean=$%.1f/MWh, profitable=%.0f%%",
