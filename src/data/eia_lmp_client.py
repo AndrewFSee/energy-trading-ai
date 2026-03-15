@@ -30,6 +30,9 @@ DEMAND_REGIONS = {
     "MISO": "Midcontinent ISO",
     "NYIS": "New York ISO",
     "ISNE": "ISO New England",
+    "CISO": "California ISO",
+    "ERCO": "Electric Reliability Council of Texas",
+    "SWPP": "Southwest Power Pool",
 }
 
 

@@ -39,8 +39,8 @@ logger = logging.getLogger(__name__)
 BRIEFING_SYSTEM_PROMPT = """\
 You are a senior power and natural gas market analyst preparing the daily
 morning briefing for the trading desk.  Your audience trades physical and
-financial power and gas across Eastern and Central US markets (PJM, MISO,
-NYIS, ISNE).
+financial power and gas across US markets (PJM, MISO, NYIS, ISNE, CISO,
+ERCO, SWPP).
 
 Write with authority.  Be specific with numbers.  Flag actionable items.
 """
@@ -91,8 +91,8 @@ on demand, model-predicted load vs recent actuals, any unusual patterns]
 gas-for-power demand implications from the load forecast]
 
 ### Power Market Dynamics
-[Regional observations for PJM/MISO/NYIS/ISNE, congestion, outages,
-renewable generation outlook if relevant]
+[Regional observations for PJM/MISO/NYIS/ISNE/CISO/ERCO/SWPP, congestion,
+outages, renewable generation outlook if relevant]
 
 ### Key Risks & Catalysts
 [Top 3 upside risks, top 3 downside risks for the session]
@@ -123,11 +123,11 @@ RAG_QUERY_TEMPLATES = {
     ),
     "extreme_weather": (
         "How do extreme weather events (heat waves, polar vortex, cold snaps) "
-        "affect electricity demand and power prices in Eastern US?"
+        "affect electricity demand and power prices across US ISOs?"
     ),
     "market_fundamentals": (
         "What are the key fundamental drivers of electricity prices in "
-        "PJM, MISO, and NYISO?  How do fuel costs, demand, and supply interact?"
+        "PJM, MISO, NYISO, CAISO, ERCOT, and SPP?  How do fuel costs, demand, and supply interact?"
     ),
     "risk_factors": (
         "What are the biggest risk factors for power and gas markets?  "
@@ -491,7 +491,7 @@ class MorningBriefingAgent:
 
         # Query gas-power nexus (always relevant for power/gas desk)
         queries["gas_power_nexus"] = RAG_QUERY_TEMPLATES["gas_power_nexus"].format(
-            region="PJM and MISO",
+            region="PJM, MISO, ERCOT, and CAISO",
         )
 
         # Query risk factors

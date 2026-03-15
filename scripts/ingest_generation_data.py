@@ -63,7 +63,7 @@ def ingest_generation(start: str, end: str) -> pd.DataFrame | None:
 
     # Fetch ALL fuel types for complete generation mix
     gen_df = client.fetch_daily_generation(
-        regions=["PJM", "MISO", "NYIS", "ISNE"],
+        regions=["PJM", "MISO", "NYIS", "ISNE", "CISO", "ERCO", "SWPP"],
         fuel_types=["WND", "SUN", "NG", "NUC", "COL", "WAT", "OTH"],
         start=start,
         end=end,
@@ -94,7 +94,7 @@ def ingest_lmp(start: str, end: str) -> pd.DataFrame | None:
         return None
 
     demand_df = client.fetch_daily_demand(
-        regions=["PJM", "MISO", "NYIS", "ISNE"],
+        regions=["PJM", "MISO", "NYIS", "ISNE", "CISO", "ERCO", "SWPP"],
         start=start,
         end=end,
     )

@@ -1,6 +1,6 @@
 """Run Spark-Spread & Heat-Rate Analysis.
 
-Analyses the profitability of gas-fired power generation across 4 US ISOs:
+Analyses the profitability of gas-fired power generation across 7 US ISOs:
 1. Estimate implied heat rates from generation dispatch data
 2. Compute spark spreads (raw and clean)
 3. Estimate merit-order supply stacks
@@ -17,10 +17,13 @@ from src.strategy.spark_spread import SparkSpreadModel, HEAT_RATES, VOM_COSTS
 
 
 REGION_MAP = {
-    "PJM":  "pjm",
-    "MISO": "miso",
+    "PJM":   "pjm",
+    "MISO":  "miso",
     "NYISO": "nyis",
     "ISONE": "isne",
+    "CAISO": "ciso",
+    "ERCOT": "erco",
+    "SPP":   "swpp",
 }
 
 

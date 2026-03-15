@@ -86,6 +86,9 @@ apis:
       - "MISO"   # Midcontinent ISO (15 states)
       - "NYIS"   # New York ISO
       - "ISNE"   # ISO New England
+      - "CISO"   # California ISO (CAISO)
+      - "ERCO"   # Electric Reliability Council of Texas (ERCOT)
+      - "SWPP"   # Southwest Power Pool (SPP)
     data_start: "2018-01-01"
     page_size: 5000
 

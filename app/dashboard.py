@@ -366,11 +366,11 @@ def run_spark_spread():
 
     # Region mapping: generation CSV uses lowercase prefixes
 
-    REGION_MAP = {"PJM": "pjm", "MISO": "miso", "NYISO": "nyis", "ISONE": "isne"}
+    REGION_MAP = {"PJM": "pjm", "MISO": "miso", "NYISO": "nyis", "ISONE": "isne", "CAISO": "ciso", "ERCOT": "erco", "SPP": "swpp"}
 
     # EIA region codes used in demand column names
 
-    EIA_REGION_MAP = {"PJM": "PJM", "MISO": "MISO", "NYISO": "NYIS", "ISONE": "ISNE"}
+    EIA_REGION_MAP = {"PJM": "PJM", "MISO": "MISO", "NYISO": "NYIS", "ISONE": "ISNE", "CAISO": "CISO", "ERCOT": "ERCO", "SPP": "SWPP"}
 
 
 
@@ -1129,6 +1129,8 @@ with tab_spark:
             "PJM": "#00ff88", "MISO": "#ff6b6b",
 
             "NYISO": "#4ecdc4", "ISONE": "#ffd93d",
+
+            "CAISO": "#a78bfa", "ERCOT": "#f97316", "SPP": "#38bdf8",
 
         }
 

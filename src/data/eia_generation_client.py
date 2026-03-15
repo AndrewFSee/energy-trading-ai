@@ -25,12 +25,15 @@ logger = logging.getLogger(__name__)
 
 EIA_BASE_URL = "https://api.eia.gov/v2"
 
-# Eastern/Central US ISO/RTO regions (same as demand client)
+# Major US ISO/RTO regions (same as demand client)
 REGIONS = {
     "PJM": "PJM Interconnection",
     "MISO": "Midcontinent ISO",
     "NYIS": "New York ISO",
     "ISNE": "ISO New England",
+    "CISO": "California ISO",
+    "ERCO": "Electric Reliability Council of Texas",
+    "SWPP": "Southwest Power Pool",
 }
 
 # EIA fuel-type codes
