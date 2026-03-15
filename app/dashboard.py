@@ -160,6 +160,36 @@ def load_ng_prices() -> pd.DataFrame:
 
     df = df.loc[~df.index.duplicated(keep="first")]
 
+    # Auto-refresh: if CSV is stale (last date > 2 calendar days old), append
+
+    last_date = df.index.max()
+
+    if pd.Timestamp.now() - last_date > pd.Timedelta(days=2):
+
+        try:
+
+            import yfinance as yf
+
+            fetch_start = (last_date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+
+            new = yf.download("NG=F", start=fetch_start, progress=False)
+
+            if new is not None and not new.empty:
+
+                new.index.name = "date"
+
+                if isinstance(new.columns, pd.MultiIndex):
+
+                    new.columns = new.columns.get_level_values(0)
+
+                df = pd.concat([df, new]).loc[~pd.concat([df, new]).index.duplicated(keep="last")].sort_index()
+
+                df.to_csv(path)
+
+        except Exception:
+
+            pass  # network error — use cached data
+
     return df
 
 
@@ -715,6 +745,12 @@ with tab_price:
         margin=dict(l=50, r=50, t=30, b=30),
 
     )
+
+    # Remove weekend gaps from all x-axes in this figure
+
+    for ax_key in [k for k in fig.layout.to_plotly_json() if k.startswith("xaxis")]:
+
+        fig.layout[ax_key]["rangebreaks"] = [dict(bounds=["sat", "mon"])]
 
     st.plotly_chart(fig, width='stretch')
 
@@ -1787,6 +1823,12 @@ with tab_signal:
         fig.update_yaxes(title_text="Score", row=2)
 
         fig.update_yaxes(title_text="Signal", row=3)
+
+        # Remove weekend gaps
+
+        for ax_key in [k for k in fig.layout.to_plotly_json() if k.startswith("xaxis")]:
+
+            fig.layout[ax_key]["rangebreaks"] = [dict(bounds=["sat", "mon"])]
 
         st.plotly_chart(fig, use_container_width=True)
 
