@@ -28,8 +28,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def load_data() -> tuple[pd.Series, pd.DataFrame | None]:
-    """Load NG prices and storage data."""
+def load_data() -> tuple[pd.Series, pd.DataFrame | None, pd.DataFrame | None, pd.DataFrame | None, pd.DataFrame | None]:
+    """Load NG prices, storage, weather, GDELT, and GPR data."""
     price_path = ROOT / "data" / "raw" / "prices_natural_gas.csv"
     storage_path = ROOT / "data" / "raw" / "eia_natgas_storage.csv"
 
@@ -46,12 +46,71 @@ def load_data() -> tuple[pd.Series, pd.DataFrame | None]:
         "Loaded NG prices: %s -> %s (%d rows)",
         prices.index[0].date(), prices.index[-1].date(), len(prices),
     )
-    return prices, storage
+
+    # --- Weather data (Open-Meteo, free, no key) ---
+    weather = None
+    weather_cache = ROOT / "data" / "processed" / "weather_cache.csv"
+    try:
+        if weather_cache.exists():
+            weather = pd.read_csv(weather_cache, parse_dates=["date"]).set_index("date")
+            logger.info("Loaded cached weather: %d rows", len(weather))
+        else:
+            from src.data.openmeteo_client import OpenMeteoClient
+            client = OpenMeteoClient()
+            # Start from 2005 (when our signal period begins) to reduce API calls
+            weather = client.fetch_weather(start="2005-01-01")
+            if weather is not None and not weather.empty:
+                weather.to_csv(weather_cache)
+                logger.info("Fetched & cached weather: %d rows", len(weather))
+    except Exception as e:
+        logger.warning("Weather data unavailable (%s) -- continuing without it", e)
+        weather = None
+
+    # --- GDELT sentiment (free, no key) ---
+    gdelt = None
+    gdelt_cache = ROOT / "data" / "processed" / "gdelt_cache.csv"
+    try:
+        if gdelt_cache.exists():
+            gdelt = pd.read_csv(gdelt_cache, parse_dates=["date"]).set_index("date")
+            logger.info("Loaded cached GDELT: %d rows", len(gdelt))
+        else:
+            # GDELT DOC API is rate-limited and unreliable; skip live fetch
+            # and rely on GPR + weight redistribution.  To populate, run:
+            #   python -c "from src.data.gdelt_sentiment import GDELTSentiment; ..."
+            logger.info("GDELT cache not found -- skipping (API is rate-limited)")
+    except Exception as e:
+        logger.warning("GDELT data unavailable (%s) -- continuing without it", e)
+        gdelt = None
+
+    # --- GPR index (free, no key) ---
+    gpr = None
+    gpr_cache = ROOT / "data" / "processed" / "gpr_cache.csv"
+    try:
+        if gpr_cache.exists():
+            gpr = pd.read_csv(gpr_cache, parse_dates=["date"]).set_index("date")
+            if gpr.index.name != "date":
+                gpr.index.name = "date"
+            logger.info("Loaded cached GPR: %d rows", len(gpr))
+        else:
+            from src.data.gpr_fetcher import fetch_gpr_daily
+            gpr = fetch_gpr_daily()
+            if gpr is not None and not gpr.empty:
+                gpr.index.name = "date"
+                gpr.to_csv(gpr_cache)
+                logger.info("Fetched & cached GPR: %d rows", len(gpr))
+    except Exception as e:
+        logger.warning("GPR data unavailable (%s) -- continuing without it", e)
+        gpr = None
+
+    return prices, storage, weather, gdelt, gpr
 
 
 def walk_forward_backtest(
     prices: pd.Series,
     storage: pd.DataFrame | None,
+    weather: pd.DataFrame | None = None,
+    gdelt: pd.DataFrame | None = None,
+    gpr: pd.DataFrame | None = None,
     train_years: int = 5,
     test_months: int = 6,
 ) -> tuple[pd.DataFrame, list[dict]]:
@@ -87,7 +146,8 @@ def walk_forward_backtest(
         # Use all data up to fold_end for signal generation (signals are causal)
         all_prices_to_date = prices[:fold_end]
         engine = CompositeSignalEngine(CompositeSignalConfig())
-        signal_df = engine.generate_signals(all_prices_to_date, storage)
+        signal_df = engine.generate_signals(all_prices_to_date, storage,
+                                            weather=weather, gdelt=gdelt, gpr=gpr)
 
         # Extract OOS portion
         oos = signal_df.loc[fold_start:fold_end].copy()
@@ -160,6 +220,9 @@ def walk_forward_backtest(
 def run_full_period_backtest(
     prices: pd.Series,
     storage: pd.DataFrame | None,
+    weather: pd.DataFrame | None = None,
+    gdelt: pd.DataFrame | None = None,
+    gpr: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Run on full dataset (2005+) to get aggregate stats + signal history."""
     # Skip first 5 years for warm-up
@@ -167,7 +230,8 @@ def run_full_period_backtest(
     prices_trimmed = prices[start:]
 
     engine = CompositeSignalEngine(CompositeSignalConfig())
-    signal_df = engine.generate_signals(prices, storage)
+    signal_df = engine.generate_signals(prices, storage,
+                                        weather=weather, gdelt=gdelt, gpr=gpr)
     signal_df = signal_df.loc[start:]
 
     bt_engine = BacktestEngine(BacktestConfig(
@@ -239,7 +303,8 @@ def print_results(
     long_mask = signal_df["signal"] == 1
     if long_mask.any():
         for col in ["regime_signal", "storage_signal", "seasonal_signal",
-                     "technical_signal", "mean_reversion_signal"]:
+                     "technical_signal", "mean_reversion_signal",
+                     "weather_signal", "sentiment_signal"]:
             if col in signal_df.columns:
                 print(f"  {col:<30} {signal_df.loc[long_mask, col].mean():+.3f}")
 
@@ -249,7 +314,8 @@ def print_results(
         print("  SUB-SIGNAL MEANS (when SHORT)")
         print("-" * 50)
         for col in ["regime_signal", "storage_signal", "seasonal_signal",
-                     "technical_signal", "mean_reversion_signal"]:
+                     "technical_signal", "mean_reversion_signal",
+                     "weather_signal", "sentiment_signal"]:
             if col in signal_df.columns:
                 print(f"  {col:<30} {signal_df.loc[short_mask, col].mean():+.3f}")
 
@@ -294,15 +360,19 @@ def print_results(
 
 
 def main() -> None:
-    prices, storage = load_data()
+    prices, storage, weather, gdelt, gpr = load_data()
 
     # Walk-forward backtest
     logger.info("Running walk-forward backtest...")
-    wf_results, fold_metrics = walk_forward_backtest(prices, storage)
+    wf_results, fold_metrics = walk_forward_backtest(
+        prices, storage, weather=weather, gdelt=gdelt, gpr=gpr,
+    )
 
     # Full-period backtest and signals
     logger.info("Running full-period backtest...")
-    signal_df, bt_result = run_full_period_backtest(prices, storage)
+    signal_df, bt_result = run_full_period_backtest(
+        prices, storage, weather=weather, gdelt=gdelt, gpr=gpr,
+    )
 
     # Print results
     print_results(signal_df, bt_result, fold_metrics)

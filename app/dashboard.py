@@ -898,9 +898,9 @@ with tab_storage:
 
             i1.metric("Value", f"${intr_val / MM:.2f}M")
 
-            i2.metric("Cycles", f"{intr.n_cycles:.2f}")
+            i2.metric("Cycles", f"{intr.cycles:.2f}")
 
-            i3.metric("Spread", f"${intr.avg_spread:.2f}/MMBtu")
+            i3.metric("Spread", f"${intr.spread_captured:.2f}/MMBtu")
 
 
 
@@ -910,7 +910,7 @@ with tab_storage:
 
             e1, e2, e3 = st.columns(3)
 
-            e1.metric("Total", f"${extr.total_value * MM / MM:.2f}M")
+            e1.metric("Total", f"${extr.total_option_value * MM / MM:.2f}M")
 
             e2.metric("Extrinsic", f"${extr.extrinsic_value * MM / MM:.2f}M")
 
@@ -1570,7 +1570,7 @@ with tab_signal:
 
         st.markdown("**Sub-signal values (latest):**")
 
-        s1, s2, s3, s4, s5 = st.columns(5)
+        s1, s2, s3, s4, s5, s6, s7 = st.columns(7)
 
         s1.metric("Regime (HMM)", f"{latest['regime_signal']:+.2f}")
 
@@ -1583,6 +1583,14 @@ with tab_signal:
         mr_val = latest.get("mean_reversion_signal", 0.0)
 
         s5.metric("Mean Reversion", f"{mr_val:+.2f}")
+
+        wth_val = latest.get("weather_signal", 0.0)
+
+        s6.metric("Weather", f"{wth_val:+.2f}")
+
+        sent_val = latest.get("sentiment_signal", 0.0)
+
+        s7.metric("Sentiment/GPR", f"{sent_val:+.2f}")
 
 
 
@@ -1743,6 +1751,10 @@ with tab_signal:
             ("technical_signal", "#FFA15A"),
 
             ("mean_reversion_signal", "#AB63FA"),
+
+            ("weather_signal", "#19D3F3"),
+
+            ("sentiment_signal", "#FF6692"),
 
         ]
 
@@ -1926,11 +1938,11 @@ with tab_note:
 
                         f"${sv_intr.total_value * 1e6 / 1e6:.2f}M, "
 
-                        f"{sv_intr.n_cycles:.2f} cycles, "
+                        f"{sv_intr.cycles:.2f} cycles, "
 
-                        f"spread=${sv_intr.avg_spread:.2f}/MMBtu\n"
+                        f"spread=${sv_intr.spread_captured:.2f}/MMBtu\n"
 
-                        f"  LSMC total: ${sv_extr.total_value * 1e6 / 1e6:.2f}M, "
+                        f"  LSMC total: ${sv_extr.total_option_value * 1e6 / 1e6:.2f}M, "
 
                         f"extrinsic: "
 

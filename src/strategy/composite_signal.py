@@ -12,7 +12,12 @@ Combines multiple structural edges into a LONG / FLAT / SHORT signal:
    RSI, and 20-day return momentum.
 5. **Mean reversion** -- z-score vs 200-day SMA. NG is well-documented
    as mean-reverting (OU process). Buy oversold, short overbought.
-6. **Composite score** -- weighted sum of sub-signals with
+6. **Weather demand** -- HDD z-score vs seasonal norm. Extreme cold
+   drives physical NG demand; extreme heat boosts power-burn.
+7. **Sentiment / geopolitical risk** -- GDELT news tone momentum
+   combined with GPR Index spike detection. Captures market fear and
+   geopolitical supply-risk events.
+8. **Composite score** -- weighted sum of sub-signals with
    conviction-scaled position sizing and trailing stops.
 """
 
@@ -62,12 +67,23 @@ class CompositeSignalConfig:
     mr_zscore_long: float = -1.0  # buy when price 1 sigma below SMA
     mr_zscore_short: float = 1.0  # sell when price 1 sigma above SMA
 
+    # Weather demand
+    weather_hdd_seasonal_window: int = 365  # days of history per week-of-year
+    weather_zscore_bull: float = 1.0   # HDD z > 1 → bullish (cold snap)
+    weather_zscore_bear: float = -1.0  # HDD z < -1 → bearish (warm winter)
+
+    # Sentiment / Geopolitical risk
+    sentiment_gdelt_weight: float = 0.60  # within sentiment sub-signal
+    sentiment_gpr_weight: float = 0.40    # within sentiment sub-signal
+
     # Composite weights (must sum to 1)
-    w_regime: float = 0.15
-    w_storage: float = 0.15
-    w_seasonal: float = 0.15
-    w_technical: float = 0.30
-    w_mean_reversion: float = 0.25
+    w_regime: float = 0.10
+    w_storage: float = 0.10
+    w_seasonal: float = 0.10
+    w_technical: float = 0.25
+    w_mean_reversion: float = 0.20
+    w_weather: float = 0.10
+    w_sentiment: float = 0.15
 
     # Signal thresholds
     long_threshold: float = 0.05  # low bar -- conviction sizing does the work
@@ -391,6 +407,171 @@ class MeanReversionSignal:
 
 
 # ---------------------------------------------------------------------------
+# Sub-signal: Weather Demand (HDD z-score)
+# ---------------------------------------------------------------------------
+
+class WeatherDemandSignal:
+    """Weather-driven demand signal based on HDD/CDD anomalies.
+
+    Computes a z-score of rolling HDD vs. the same-week-of-year seasonal
+    average.  Abnormally cold weather (high HDD) → bullish (physical
+    demand surge).  Abnormally warm weather (low HDD) → bearish.
+
+    In summer, CDD spikes also contribute (power-burn for A/C), but the
+    dominant NG weather driver is winter heating demand.
+    """
+
+    def __init__(self, seasonal_window: int = 365) -> None:
+        self.seasonal_window = seasonal_window
+
+    def compute(self, weather_df: pd.DataFrame,
+                price_index: pd.DatetimeIndex) -> pd.Series:
+        """Compute weather demand signal aligned to daily price index.
+
+        Args:
+            weather_df: DataFrame indexed by date with 'hdd' and 'cdd' cols
+                        (from OpenMeteoClient.fetch_weather()).
+            price_index: DatetimeIndex of daily prices.
+
+        Returns:
+            Series of signal values [-1, +1] on price_index.
+        """
+        if weather_df is None or weather_df.empty or "hdd" not in weather_df.columns:
+            return pd.Series(0.0, index=price_index, name="weather_signal")
+
+        df = weather_df[["hdd", "cdd"]].copy()
+        df.index = pd.to_datetime(df.index)
+        df = df.sort_index()
+
+        # Compute week-of-year for seasonal grouping
+        df["week"] = df.index.isocalendar().week.astype(int)
+
+        # Rolling seasonal average HDD by week-of-year (expanding, no lookahead)
+        hdd_zscore = pd.Series(0.0, index=df.index, dtype=float)
+        for i in range(60, len(df)):  # need at least 60 days of history
+            current_week = df["week"].iloc[i]
+            # All same-week observations prior to this date
+            hist_mask = (df["week"] == current_week) & (df.index < df.index[i])
+            hist_hdd = df.loc[hist_mask, "hdd"]
+            if len(hist_hdd) >= 3:
+                mu = hist_hdd.mean()
+                sigma = hist_hdd.std()
+                if sigma > 0:
+                    hdd_zscore.iloc[i] = (df["hdd"].iloc[i] - mu) / sigma
+
+        # Also compute CDD z-score for summer power-burn effect
+        cdd_zscore = pd.Series(0.0, index=df.index, dtype=float)
+        for i in range(60, len(df)):
+            current_week = df["week"].iloc[i]
+            hist_mask = (df["week"] == current_week) & (df.index < df.index[i])
+            hist_cdd = df.loc[hist_mask, "cdd"]
+            if len(hist_cdd) >= 3:
+                mu = hist_cdd.mean()
+                sigma = hist_cdd.std()
+                if sigma > 0:
+                    cdd_zscore.iloc[i] = (df["cdd"].iloc[i] - mu) / sigma
+
+        # Combined weather signal:
+        # High HDD z-score (cold snap) → bullish (+)
+        # High CDD z-score (heat wave) → mildly bullish (power-burn)
+        # Low HDD z-score (warm winter) → bearish (-)
+        raw = (hdd_zscore * 0.75 + cdd_zscore * 0.25).clip(-2.0, 2.0)
+
+        # Smooth: scale to [-1, +1]
+        signal = (raw / 2.0).clip(-1.0, 1.0)
+
+        # 7-day smoothing to avoid daily noise
+        signal = signal.rolling(7, min_periods=1).mean()
+
+        # Align to price index
+        signal = signal.reindex(price_index, method="ffill").fillna(0.0)
+        signal.name = "weather_signal"
+        return signal
+
+
+# ---------------------------------------------------------------------------
+# Sub-signal: Sentiment / Geopolitical Risk
+# ---------------------------------------------------------------------------
+
+class SentimentGPRSignal:
+    """Combined news sentiment and geopolitical risk signal.
+
+    Blends:
+    - GDELT news tone momentum (falling tone = bearish sentiment = bullish
+      for NG as fear drives buying; rising tone = complacency = bearish)
+    - GPR Index spikes (geopolitical crises → supply disruption risk → bullish)
+
+    The logic: negative sentiment shocks and geopolitical spikes tend to
+    push NG higher (fear bid, supply risk). Calm markets with positive
+    sentiment tend to see NG drift lower (complacency, oversupply).
+    """
+
+    def __init__(self, gdelt_weight: float = 0.60,
+                 gpr_weight: float = 0.40) -> None:
+        self.gdelt_weight = gdelt_weight
+        self.gpr_weight = gpr_weight
+
+    def compute(self, gdelt_df: pd.DataFrame | None,
+                gpr_df: pd.DataFrame | None,
+                price_index: pd.DatetimeIndex) -> pd.Series:
+        """Compute sentiment/GPR signal aligned to daily price index.
+
+        Args:
+            gdelt_df: DataFrame indexed by date with GDELT tone features
+                      (from GDELTSentiment.fetch_sentiment()).
+            gpr_df: DataFrame indexed by date with GPR features
+                    (from fetch_gpr_daily()).
+            price_index: DatetimeIndex of daily prices.
+
+        Returns:
+            Series of signal values [-1, +1] on price_index.
+        """
+        gdelt_signal = pd.Series(0.0, index=price_index)
+        gpr_signal = pd.Series(0.0, index=price_index)
+
+        # --- GDELT tone momentum ---
+        if gdelt_df is not None and not gdelt_df.empty:
+            gdelt = gdelt_df.copy()
+            gdelt.index = pd.to_datetime(gdelt.index)
+
+            if "gdelt_tone_zscore" in gdelt.columns:
+                # Negative tone z-score = bearish news = bullish for NG
+                # (fear drives buying, supply concerns)
+                tone_z = gdelt["gdelt_tone_zscore"].reindex(
+                    price_index, method="ffill"
+                ).fillna(0.0)
+                gdelt_signal = (-tone_z / 2.0).clip(-1.0, 1.0)
+            elif "gdelt_tone_momentum" in gdelt.columns:
+                # Falling momentum = bearish news = bullish for NG
+                tone_mom = gdelt["gdelt_tone_momentum"].reindex(
+                    price_index, method="ffill"
+                ).fillna(0.0)
+                gdelt_signal = (-tone_mom / 2.0).clip(-1.0, 1.0)
+
+        # --- GPR spikes ---
+        if gpr_df is not None and not gpr_df.empty:
+            gpr = gpr_df.copy()
+            gpr.index = pd.to_datetime(gpr.index)
+
+            if "gpr_zscore" in gpr.columns:
+                # High GPR z-score → geopolitical crisis → bullish for NG
+                gpr_z = gpr["gpr_zscore"].reindex(
+                    price_index, method="ffill"
+                ).fillna(0.0)
+                # Asymmetric: spikes are bullish, calm is mildly bearish
+                gpr_signal = (gpr_z / 3.0).clip(-0.5, 1.0)
+
+        # Blend
+        combined = (
+            self.gdelt_weight * gdelt_signal
+            + self.gpr_weight * gpr_signal
+        ).clip(-1.0, 1.0)
+
+        combined.name = "sentiment_signal"
+        return combined
+
+
+# ---------------------------------------------------------------------------
 # Composite Signal Aggregator
 # ---------------------------------------------------------------------------
 
@@ -409,6 +590,9 @@ class CompositeSignalEngine:
         self,
         prices: pd.Series,
         storage: pd.DataFrame | None = None,
+        weather: pd.DataFrame | None = None,
+        gdelt: pd.DataFrame | None = None,
+        gpr: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
         """Generate composite trading signals.
 
@@ -416,6 +600,12 @@ class CompositeSignalEngine:
             prices: Daily NG close prices (DatetimeIndex).
             storage: Optional weekly storage DataFrame (['date','w']).
                 If None, storage signal is zeroed and weight redistributed.
+            weather: Optional daily weather DataFrame with 'hdd','cdd' cols
+                (from OpenMeteoClient.fetch_weather()).
+            gdelt: Optional daily GDELT sentiment DataFrame
+                (from GDELTSentiment.fetch_sentiment()).
+            gpr: Optional daily GPR DataFrame
+                (from fetch_gpr_daily()).
 
         Returns:
             DataFrame with all sub-signals, composite score, discrete signal,
@@ -468,6 +658,31 @@ class CompositeSignalEngine:
         )
         mr_signal = mr_sig.compute(prices)
 
+        # --- Weather Demand ---
+        if weather is not None and not weather.empty:
+            weather_sig = WeatherDemandSignal(
+                seasonal_window=self.cfg.weather_hdd_seasonal_window,
+            )
+            weather_signal = weather_sig.compute(weather, prices.index)
+            w_weather = self.cfg.w_weather
+        else:
+            weather_signal = pd.Series(0.0, index=prices.index, name="weather_signal")
+            w_weather = 0.0
+            logger.warning("No weather data -- weather weight redistributed")
+
+        # --- Sentiment / GPR ---
+        if (gdelt is not None and not gdelt.empty) or (gpr is not None and not gpr.empty):
+            sent_sig = SentimentGPRSignal(
+                gdelt_weight=self.cfg.sentiment_gdelt_weight,
+                gpr_weight=self.cfg.sentiment_gpr_weight,
+            )
+            sentiment_signal = sent_sig.compute(gdelt, gpr, prices.index)
+            w_sentiment = self.cfg.w_sentiment
+        else:
+            sentiment_signal = pd.Series(0.0, index=prices.index, name="sentiment_signal")
+            w_sentiment = 0.0
+            logger.warning("No sentiment/GPR data -- sentiment weight redistributed")
+
         # --- Align all to price index ---
         regime_signal = regime_df["regime_signal"].reindex(prices.index).fillna(0.0)
 
@@ -477,15 +692,26 @@ class CompositeSignalEngine:
         w_technical = self.cfg.w_technical
         w_mr = self.cfg.w_mean_reversion
 
-        # Redistribute storage weight if absent
+        # Redistribute absent weights proportionally among active signals
+        absent_weight = 0.0
         if w_storage == 0.0:
-            total_other = w_regime + w_seasonal + w_technical + w_mr
-            if total_other > 0:
-                scale = 1.0 / total_other
+            absent_weight += self.cfg.w_storage
+        if w_weather == 0.0:
+            absent_weight += self.cfg.w_weather
+        if w_sentiment == 0.0:
+            absent_weight += self.cfg.w_sentiment
+
+        if absent_weight > 0:
+            active_total = w_regime + w_storage + w_seasonal + w_technical + w_mr + w_weather + w_sentiment
+            if active_total > 0:
+                scale = 1.0 / active_total
                 w_regime *= scale
+                w_storage *= scale
                 w_seasonal *= scale
                 w_technical *= scale
                 w_mr *= scale
+                w_weather *= scale
+                w_sentiment *= scale
 
         # --- Composite score ---
         composite = (
@@ -494,6 +720,8 @@ class CompositeSignalEngine:
             + w_seasonal * seasonal_signal
             + w_technical * tech_signal
             + w_mr * mr_signal
+            + w_weather * weather_signal
+            + w_sentiment * sentiment_signal
         )
 
         # --- Map to discrete signal ---
@@ -543,6 +771,8 @@ class CompositeSignalEngine:
             "seasonal_signal": seasonal_signal,
             "technical_signal": tech_signal,
             "mean_reversion_signal": mr_signal,
+            "weather_signal": weather_signal,
+            "sentiment_signal": sentiment_signal,
             "composite_score": composite,
             "signal": signal,
             "realised_vol": realised_vol,
